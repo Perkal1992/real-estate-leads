@@ -1,3 +1,5 @@
+from dotenv import load_dotenv
+load_dotenv()
 from supabase import create_client, Client
 import streamlit as st
 import pandas as pd
