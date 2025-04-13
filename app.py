@@ -1,24 +1,30 @@
-from dotenv import load_dotenv
-load_dotenv()
-from supabase import create_client, Client
-import streamlit as st
-import pandas as pd
-import requests
 import os
-from bs4 import BeautifulSoup
 import re
+import requests
+import pandas as pd
+import streamlit as st
 from datetime import datetime
-from config import GOOGLE_MAPS_API_KEY, SUPABASE_URL, SUPABASE_KEY
+from dotenv import load_dotenv
+from bs4 import BeautifulSoup
+from supabase import create_client, Client
+
+# Load .env
+load_dotenv()
+SUPABASE_URL = os.getenv("SUPABASE_URL")
+SUPABASE_KEY = os.getenv("SUPABASE_KEY")
+GOOGLE_MAPS_API_KEY = os.getenv("GOOGLE_MAPS_API_KEY")
 
 supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 
+# Streamlit UI setup
 st.set_page_config(page_title="Savory Realty Investments — Wholesaling Dashboard", layout="wide")
-
 st.title("🏘️ Savory Realty Investments")
 st.markdown("Upload a CSV of property addresses or view live leads scraped every 30 min.")
 
+# Upload CSV
 uploaded_file = st.file_uploader("📁 Upload CSV", type=["csv"])
 
+# Google Maps Geocoding
 def geocode_address(address):
     url = f"https://maps.googleapis.com/maps/api/geocode/json?address={address}&key={GOOGLE_MAPS_API_KEY}"
     response = requests.get(url)
@@ -29,9 +35,11 @@ def geocode_address(address):
             return location["lat"], location["lng"]
     return None, None
 
+# Push to Supabase
 def push_lead_to_supabase(lead):
     supabase.table("leads").insert(lead).execute()
 
+# Zillow FSBO Scraper
 def scrape_zillow_fsbo():
     headers = {"User-Agent": "Mozilla/5.0"}
     url = "https://www.zillow.com/dallas-tx/fsbo/"
@@ -68,11 +76,11 @@ def scrape_zillow_fsbo():
                     "arv_estimate": None,
                     "created_at": datetime.utcnow().isoformat()
                 })
-
         return leads
     except:
         return []
 
+# Craigslist Scraper
 def scrape_craigslist():
     url = "https://dallas.craigslist.org/search/rea"
     headers = {"User-Agent": "Mozilla/5.0"}
@@ -102,18 +110,22 @@ def scrape_craigslist():
                 })
     return leads
 
+# Placeholder for FB Marketplace
 def scrape_fb_marketplace():
     return []
 
+# Run all scrapers
 def run_all_scrapers():
     leads = scrape_zillow_fsbo() + scrape_craigslist() + scrape_fb_marketplace()
     for lead in leads:
         push_lead_to_supabase(lead)
 
+# Pull from Supabase
 def fetch_supabase_leads():
     result = supabase.table("leads").select("*").order("created_at", desc=True).limit(100).execute()
     return pd.DataFrame(result.data)
 
+# CSV Upload Flow
 if uploaded_file:
     df = pd.read_csv(uploaded_file)
     if "Address" not in df.columns:
@@ -156,8 +168,14 @@ if uploaded_file:
                 }
                 push_lead_to_supabase(lead)
 
-        st.success("✅ Processing complete")
+        st.success("✅ CSV processing complete")
         st.dataframe(df)
 
+# Scrape Button
+if st.button("🔄 Run Lead Scrapers Now"):
+    run_all_scrapers()
+    st.success("Scrapers ran successfully!")
+
+# Display Supabase leads
 st.subheader("🔍 Live Lead Feed")
 st.dataframe(fetch_supabase_leads())
