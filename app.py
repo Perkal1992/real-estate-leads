@@ -179,3 +179,77 @@ if st.button("🔄 Run Lead Scrapers Now"):
 # Display Supabase leads
 st.subheader("🔍 Live Lead Feed")
 st.dataframe(fetch_supabase_leads())
+# 🔧 Step 1: Supabase schema update (SQL for manual execution)
+# You can run this in Supabase SQL Editor or pgAdmin
+"""
+ALTER TABLE leads
+ADD COLUMN is_hot BOOLEAN DEFAULT FALSE,
+ADD COLUMN arv NUMERIC,
+ADD COLUMN discount_to_arv NUMERIC,
+ADD COLUMN source TEXT;
+"""
+
+# 🔁 Step 2: Update scraper.py or enrichment logic
+import re
+from supabase import create_client, Client
+
+# Assumes SUPABASE_URL and SUPABASE_KEY are set as env vars
+supabase: Client = create_client(os.getenv("SUPABASE_URL"), os.getenv("SUPABASE_KEY"))
+
+HOT_KEYWORDS = ["urgent", "as-is", "cash", "must sell", "investor special", "fire sale"]
+
+def detect_hot_lead(description: str, price: float, arv: float, created_at: str) -> bool:
+    keyword_match = any(k in description.lower() for k in HOT_KEYWORDS)
+    good_discount = arv and price / arv < 0.7
+    recent_post = (datetime.now() - datetime.fromisoformat(created_at)).days <= 2
+    return keyword_match or good_discount or recent_post
+
+def estimate_arv(zipcode: str, sqft: float) -> float:
+    comps = {
+        "75216": 110,  # $/sqft
+        "75217": 105,
+        "75241": 100
+    }
+    ppsf = comps.get(zipcode, 100)
+    return round(ppsf * sqft, 2)
+
+# Example enrichment before insert
+lead = {
+    "price": 95000,
+    "sqft": 1200,
+    "zipcode": "75216",
+    "description": "Urgent cash sale! Needs TLC.",
+    "created_at": "2025-04-10T12:00:00"
+}
+
+lead["arv"] = estimate_arv(lead["zipcode"], lead["sqft"])
+lead["discount_to_arv"] = round(1 - lead["price"] / lead["arv"], 2)
+lead["is_hot"] = detect_hot_lead(lead["description"], lead["price"], lead["arv"], lead["created_at"])
+lead["source"] = "Zillow FSBO"
+
+supabase.table("leads").insert(lead).execute()
+
+# 🖥 Step 3: Streamlit UI updates (add to app.py)
+import streamlit as st
+
+city = st.selectbox("City", ["All"] + sorted(set(df.city.dropna())), index=0)
+zipcode = st.selectbox("ZIP Code", ["All"] + sorted(set(df.zipcode.dropna())), index=0)
+source = st.selectbox("Source", ["All"] + sorted(set(df.source.dropna())), index=0)
+
+filtered_df = df.copy()
+if city != "All":
+    filtered_df = filtered_df[filtered_df.city == city]
+if zipcode != "All":
+    filtered_df = filtered_df[filtered_df.zipcode == zipcode]
+if source != "All":
+    filtered_df = filtered_df[filtered_df.source == source]
+
+# Highlight hot leads
+def highlight_hot(val):
+    return "background-color: #ffcccc; font-weight: bold" if val else ""
+
+st.dataframe(filtered_df.style.applymap(highlight_hot, subset=["is_hot"]))
+
+# Show ARV and discount
+st.markdown("#### ARV Insights")
+st.dataframe(filtered_df[["price", "arv", "discount_to_arv"]])
