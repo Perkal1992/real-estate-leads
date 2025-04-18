@@ -219,3 +219,41 @@ with tabs[2]:
         .execute()
     data = resp.data or []
     st.dataframe(pd.DataFrame(data))
+# ─────────────────────────────────────────
+# Live Lead Feed (Tab 3)
+# ─────────────────────────────────────────
+with tabs[2]:
+    st.subheader("🔍 Live Lead Feed")
+    try:
+        # Pull the most recent 100 rows, descending by created_at
+        resp = supabase.table("leads")\
+            .select("*")\
+            .order("created_at", desc=True)\
+            .limit(100)\
+            .execute()
+        data = resp.data or []
+        if data:
+            df_live = pd.DataFrame(data)
+            # Show the key columns you care about
+            st.dataframe(
+                df_live[
+                    [
+                        "created_at",
+                        "source",
+                        "address",
+                        "city",
+                        "state",
+                        "zip",
+                        "price",
+                        "latitude",
+                        "longitude",
+                        "google_maps",
+                        "street_view",
+                    ]
+                ].sort_values("created_at", ascending=False),
+                height=500,
+            )
+        else:
+            st.info("No leads found yet. Try uploading or scraping some first.")
+    except Exception as e:
+        st.error(f"Failed to fetch live leads: {e}")
