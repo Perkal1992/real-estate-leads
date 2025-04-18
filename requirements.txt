@@ -4,3 +4,4 @@ requests
 googlemaps
 supabase
 python-dotenv
+beautifulsoup4
