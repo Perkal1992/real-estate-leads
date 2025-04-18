@@ -1,204 +1,221 @@
-# Your app.py content goes here...import os
+import os
 import streamlit as st
 import pandas as pd
 import requests
 from datetime import datetime
 from supabase import create_client, Client
 from bs4 import BeautifulSoup
-
-# ── CONFIG / CREDENTIALS ────────────────────────────────────────────────────────
-# These values are read from your Repo Secrets or .env (Render / Streamlit Cloud)
-SUPABASE_URL       = os.getenv("SUPABASE_URL")
-SUPABASE_KEY       = os.getenv("SUPABASE_KEY")
-GOOGLE_MAPS_API_KEY= os.getenv("GOOGLE_MAPS_API_KEY")
-RAPIDAPI_KEY       = os.getenv("RAPIDAPI_KEY")
+from config import SUPABASE_URL, SUPABASE_KEY, GOOGLE_MAPS_API_KEY, RAPIDAPI_KEY
 
 # Initialize Supabase client
 supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 
-# ── PAGE CONFIG ────────────────────────────────────────────────────────────────
+# Must be first Streamlit command
 st.set_page_config(
     page_title="🏘️ Savory Realty Lead Engine",
-    page_icon="🏠",
     layout="wide",
 )
 
-# ── CUSTOM STYLING (BLACK MARBLE) ───────────────────────────────────────────────
+# Black marble background & styling
 st.markdown(
     """
     <style>
-      body      { background-color: #1c1c1c; color: white; }
-      .stApp    { 
+    body {
+        background-color: #1c1c1c;
+        color: white;
+        font-family: Arial, sans-serif;
+    }
+    .stApp {
         background-image: url("https://www.transparenttextures.com/patterns/black-marble.png");
-        background-size: cover; 
-      }
-      .css-1qfqu09 { background-color: #1c1c1c; }
-      .stFileUploader, .stButton>button {
-        background-color: #333333; color: white;
-      }
-      .stTextInput>div>div>input,
-      .stSelectbox, .stMultiselect {
-        background-color: #222222; color: white;
-      }
+        background-size: cover;
+        color: white;
+    }
+    .stFileUploader, .stTextInput, .stButton, .stSelectbox {
+        background-color: rgba(0,0,0,0.3) !important;
+        color: white !important;
+    }
     </style>
     """,
     unsafe_allow_html=True,
 )
 
 st.title("🏘️ Savory Realty Lead Engine")
-st.markdown("Upload CSV or run live scrapers for Dallas FSBO & Craigslist every 30 min.")
+st.markdown("Upload a CSV or run live scrapers for FSBO/off‑market deals in Dallas County.")
 
-# ── UTILITIES ───────────────────────────────────────────────────────────────────
-
+# ─────────────────────────────────────────
+# Utility: Geocode an address via Google Maps
+# ─────────────────────────────────────────
 def geocode_address(address: str):
-    """Return (lat, lng) or (None, None)."""
-    url = f"https://maps.googleapis.com/maps/api/geocode/json"
-    params = {"address": address, "key": GOOGLE_MAPS_API_KEY}
-    resp = requests.get(url, params=params)
-    if resp.ok:
-        data = resp.json()
-        if data["status"] == "OK":
-            loc = data["results"][0]["geometry"]["location"]
-            return loc["lat"], loc["lng"]
+    url = (
+        "https://maps.googleapis.com/maps/api/geocode/json"
+        f"?address={requests.utils.quote(address)}&key={GOOGLE_MAPS_API_KEY}"
+    )
+    resp = requests.get(url)
+    data = resp.json() if resp.ok else {}
+    if data.get("status") == "OK":
+        loc = data["results"][0]["geometry"]["location"]
+        return loc["lat"], loc["lng"]
     return None, None
 
-def push_to_supabase(lead: dict):
-    """Insert a single lead dict into Supabase."""
+# ─────────────────────────────────────────
+# Push a single lead record to Supabase
+# ─────────────────────────────────────────
+def push_to_supabase(record: dict):
     try:
-        supabase.table("leads").insert(lead).execute()
+        supabase.table("leads").insert(record).execute()
     except Exception as e:
-        st.warning(f"Failed to push lead: {e}")
+        st.warning(f"Failed to insert: {e}")
 
-# ── SCRAPERS ────────────────────────────────────────────────────────────────────
-
-def scrape_zillow_fsbo(zipcode="75201"):
-    """Fetch FSBO listings via RapidAPI Zillow endpoint."""
-    url = "https://zillow-com1.p.rapidapi.com/propertyListings"
+# ─────────────────────────────────────────
+# Scraper: Zillow FSBO using RapidAPI
+# ─────────────────────────────────────────
+def scrape_zillow_rapidapi_fsbo(zip_code="75201", limit=20):
+    endpoint = "https://zillow-com1.p.rapidapi.com/propertyListings"
+    params = {
+        "propertyStatus": "FOR_SALE",
+        "homeType": ["Houses"],
+        "sort": "Newest",
+        "limit": str(limit),
+        "zip": zip_code,
+    }
     headers = {
         "x-rapidapi-host": "zillow-com1.p.rapidapi.com",
-        "x-rapidapi-key": RAPIDAPI_KEY
+        "x-rapidapi-key": RAPIDAPI_KEY,
     }
-    params = {
-        "propertyStatus":"FOR_SALE",
-        "homeType":["Houses"],
-        "sort":"Newest",
-        "limit":"10",
-        "zip": zipcode
-    }
-    resp = requests.get(url, headers=headers, params=params)
+    r = requests.get(endpoint, headers=headers, params=params)
+    data = r.json() if r.ok else {}
     leads = []
-    if resp.ok:
-        data = resp.json().get("props", [])
-        for item in data:
-            addr  = item.get("address")
-            price = item.get("price")
-            if not addr:
-                continue
-            lat,lng = geocode_address(addr)
-            if lat and lng:
-                leads.append({
-                    "source":       "Zillow FSBO",
-                    "address":      addr,
-                    "city":         "",
-                    "state":        "TX",
-                    "zip":          zipcode,
-                    "price":        price,
-                    "latitude":     lat,
-                    "longitude":    lng,
-                    "google_maps":  f"https://www.google.com/maps?q={lat},{lng}",
-                    "street_view":  f"https://www.google.com/maps/@?api=1&map_action=pano&viewpoint={lat},{lng}",
-                    "created_at":   datetime.utcnow().isoformat()
-                })
+    for item in data.get("props", []):
+        addr = item.get("address")
+        price = item.get("price")
+        lat, lng = geocode_address(addr) if addr else (None, None)
+        if addr and lat and lng:
+            leads.append({
+                "source": "Zillow FSBO (RapidAPI)",
+                "address": addr,
+                "city": "",
+                "state": "TX",
+                "zip": zip_code,
+                "latitude": lat,
+                "longitude": lng,
+                "price": price,
+                "google_maps": f"https://www.google.com/maps?q={lat},{lng}",
+                "street_view": (
+                    f"https://maps.googleapis.com/maps/api/streetview"
+                    f"?size=600x300&location={lat},{lng}&key={GOOGLE_MAPS_API_KEY}"
+                ),
+                "created_at": datetime.utcnow().isoformat(),
+            })
     return leads
 
-def scrape_craigslist():
-    """Scrape DFW Craigslist REA category."""
+# ─────────────────────────────────────────
+# Scraper: Craigslist Dallas real estate
+# ─────────────────────────────────────────
+def scrape_craigslist_dallas(limit=20):
     url = "https://dallas.craigslist.org/search/rea"
-    headers = {"User-Agent":"Mozilla/5.0"}
+    headers = {"User-Agent": "Mozilla/5.0"}
     resp = requests.get(url, headers=headers)
+    soup = BeautifulSoup(resp.text, "html.parser")
+    postings = soup.select("li.result-row")[:limit]
     leads = []
-    if resp.ok:
-        soup = BeautifulSoup(resp.text, "html.parser")
-        rows = soup.select("li.result-row")[:10]
-        for row in rows:
-            title = row.select_one("a.result-title")
-            if not title:
-                continue
-            addr = title.text.strip()
-            lat,lng = geocode_address(addr)
-            if lat and lng:
-                leads.append({
-                    "source":       "Craigslist",
-                    "address":      addr,
-                    "city":         "Dallas",
-                    "state":        "TX",
-                    "zip":          "",
-                    "price":        None,
-                    "latitude":     lat,
-                    "longitude":    lng,
-                    "google_maps":  f"https://www.google.com/maps/search/?api=1&query={lat},{lng}",
-                    "street_view":  f"https://www.google.com/maps/@?api=1&map_action=pano&viewpoint={lat},{lng}",
-                    "created_at":   datetime.utcnow().isoformat()
-                })
+    for post in postings:
+        title = post.select_one("a.result-title")
+        if not title:
+            continue
+        addr = title.get_text(strip=True)
+        lat, lng = geocode_address(addr)
+        if lat and lng:
+            leads.append({
+                "source": "Craigslist DFW",
+                "address": addr,
+                "city": "Dallas",
+                "state": "TX",
+                "zip": "",
+                "latitude": lat,
+                "longitude": lng,
+                "price": None,
+                "google_maps": f"https://www.google.com/maps?q={lat},{lng}",
+                "street_view": (
+                    f"https://maps.googleapis.com/maps/api/streetview"
+                    f"?size=600x300&location={lat},{lng}&key={GOOGLE_MAPS_API_KEY}"
+                ),
+                "created_at": datetime.utcnow().isoformat(),
+            })
     return leads
 
-# ── WORKFLOWS ───────────────────────────────────────────────────────────────────
-
-def run_scrapers_and_push():
-    z = scrape_zillow_fsbo()
-    c = scrape_craigslist()
-    combined = z + c
-    for lead in combined:
+# ─────────────────────────────────────────
+# Crawl both sources & push
+# ─────────────────────────────────────────
+def run_all_scrapers():
+    all_leads = []
+    all_leads += scrape_zillow_rapidapi_fsbo()
+    all_leads += scrape_craigslist_dallas()
+    for lead in all_leads:
         push_to_supabase(lead)
-    return combined
+    return all_leads
 
-def upload_csv_flow(uploaded_file):
-    df = pd.read_csv(uploaded_file)
-    for idx,row in df.iterrows():
-        addr = row["Address"]
-        lat,lng = geocode_address(addr)
-        lead = {
-            "source":      "CSV Upload",
-            "address":     addr,
-            "city":        "Dallas",
-            "state":       "TX",
-            "zip":         "",
-            "price":       row.get("Price", None),
-            "latitude":    lat,
-            "longitude":   lng,
-            "google_maps": f"https://www.google.com/maps?q={lat},{lng}" if lat else None,
-            "street_view": f"https://www.google.com/maps/@?api=1&map_action=pano&viewpoint={lat},{lng}" if lat else None,
-            "created_at":  datetime.utcnow().isoformat()
-        }
-        push_to_supabase(lead)
-    return df
+# ─────────────────────────────────────────
+# CSV Upload & Enrich Flow
+# ─────────────────────────────────────────
+def upload_csv_and_push(file):
+    df = pd.read_csv(file)
+    if "Address" not in df.columns:
+        st.error("CSV must include an 'Address' column.")
+        return
+    df["Latitude"], df["Longitude"] = zip(
+        *df["Address"].apply(lambda a: geocode_address(a))
+    )
+    df["Google Maps"] = df.apply(
+        lambda r: f"https://www.google.com/maps?q={r.Latitude},{r.Longitude}",
+        axis=1,
+    )
+    df["Street View"] = df.apply(
+        lambda r: (
+            f"https://maps.googleapis.com/maps/api/streetview"
+            f"?size=600x300&location={r.Latitude},{r.Longitude}"
+            f"&key={GOOGLE_MAPS_API_KEY}"
+        ),
+        axis=1,
+    )
+    st.dataframe(df)
+    for _, row in df.iterrows():
+        push_to_supabase({
+            "source": "CSV Upload",
+            "address": row["Address"],
+            "city": row.get("City", ""),
+            "state": row.get("State", ""),
+            "zip": row.get("Zip", ""),
+            "latitude": row.Latitude,
+            "longitude": row.Longitude,
+            "price": row.get("Price", None),
+            "google_maps": row["Google Maps"],
+            "street_view": row["Street View"],
+            "created_at": datetime.utcnow().isoformat(),
+        })
 
-# ── UI TABS ─────────────────────────────────────────────────────────────────────
-
+# ─────────────────────────────────────────
+# Streamlit Tabs
+# ─────────────────────────────────────────
 tabs = st.tabs(["📁 Upload CSV", "🔄 Scrape Now", "📊 View Leads"])
 
-# Tab 1: CSV upload
 with tabs[0]:
-    file = st.file_uploader("Upload CSV (must have 'Address' column)", type="csv")
-    if file:
-        df_out = upload_csv_flow(file)
-        st.success("CSV processed & pushed!")
-        st.dataframe(df_out)
+    uploaded = st.file_uploader("Choose CSV file", type="csv")
+    if uploaded:
+        upload_csv_and_push(uploaded)
+        st.success("✅ CSV Upload + Enrich complete.")
 
-# Tab 2: Manual scrape
 with tabs[1]:
     if st.button("Run Live Scrapers"):
-        with st.spinner("Scraping Zillow & Craigslist…"):
-            new_leads = run_scrapers_and_push()
-            st.success(f"{len(new_leads)} leads scraped & saved.")
+        with st.spinner("Scraping FSBO & Craigslist..."):
+            results = run_all_scrapers()
+            st.success(f"✅ {len(results)} leads scraped & saved.")
 
-# Tab 3: View from Supabase
 with tabs[2]:
-    st.markdown("### Live Lead Feed")
-    resp = supabase.table("leads").select("*").order("created_at", desc=True).limit(100).execute()
+    st.subheader("Supabase — Latest Leads")
+    resp = supabase.table("leads")\
+        .select("*")\
+        .order("created_at", desc=True)\
+        .limit(100)\
+        .execute()
     data = resp.data or []
-    if data:
-        df = pd.DataFrame(data)
-        st.dataframe(df)
-    else:
-        st.info("No leads found yet. Run scrapers or upload CSV.")
+    st.dataframe(pd.DataFrame(data))
