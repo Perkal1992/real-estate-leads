@@ -1,7 +1,7 @@
 streamlit
 pandas
 requests
-beautifulsoup4
-googlemaps
+beautifulsoup4      # <‑‑ bs4 error disappears
 supabase
-python-dotenv
+googlemaps
+
