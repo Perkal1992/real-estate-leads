@@ -1,4 +1,5 @@
 # app.py
+
 import streamlit as st
 import pandas as pd
 import requests
@@ -19,27 +20,27 @@ st.set_page_config(
 )
 
 # ───────────────────────────────────────────────────────────
-# Black marble background + white text styling
+# Black‑marble background + white text styling
 st.markdown(
     """
     <style>
     body {
-      background-color: #1c1c1c;
-      color: white;
+      background-color: #1c1c1c !important;
+      color: #f0f0f0 !important;
       font-family: Arial, sans-serif;
     }
     .stApp {
       background-image: url("https://www.transparenttextures.com/patterns/black-marble.png");
       background-size: cover;
     }
-    /* Inputs and buttons */
+    /* Inputs & buttons */
     .stFileUploader, .stTextInput, .stSelectbox, .stButton>button {
-      background: rgba(0,0,0,0.3) !important;
-      color: white !important;
+      background: rgba(0,0,0,0.4) !important;
+      color: #f0f0f0 !important;
     }
     /* Dataframe cells */
     .stDataFrame div[role="cell"] {
-      color: white !important;
+      color: #f0f0f0 !important;
     }
     </style>
     """,
@@ -47,10 +48,10 @@ st.markdown(
 )
 
 st.title("🏘️ Savory Realty Lead Engine")
-st.markdown("Upload a CSV or run live scrapers for FSBO/off‑market deals in Dallas County.")
+st.markdown("Upload your CSV or run live scrapers for FSBO/off‑market deals in Dallas County.")
 
 # ───────────────────────────────────────────────────────────
-# UTILITIES
+# UTILITY FUNCTIONS
 # ───────────────────────────────────────────────────────────
 
 def geocode_address(address: str):
@@ -63,9 +64,9 @@ def geocode_address(address: str):
     r = requests.get(url)
     if not r.ok:
         return None, None
-    result = r.json()
-    if result.get("status") == "OK":
-        loc = result["results"][0]["geometry"]["location"]
+    data = r.json()
+    if data.get("status") == "OK":
+        loc = data["results"][0]["geometry"]["location"]
         return loc["lat"], loc["lng"]
     return None, None
 
@@ -102,29 +103,31 @@ def scrape_zillow_rapidapi_fsbo(zip_code="75201", limit=20):
     for item in data.get("props", []):
         addr  = item.get("address")
         price = item.get("price")
-        lat, lng = geocode_address(addr) if addr else (None, None)
-        if addr and lat and lng:
+        if not addr:
+            continue
+        lat, lng = geocode_address(addr)
+        if lat and lng:
             leads.append({
-                "source": "Zillow FSBO (RapidAPI)",
-                "address": addr,
-                "city": "",
-                "state": "TX",
-                "zip": zip_code,
-                "latitude": lat,
-                "longitude": lng,
-                "price": price,
+                "source":      "Zillow FSBO (RapidAPI)",
+                "address":     addr,
+                "city":        "",
+                "state":       "TX",
+                "zip":         zip_code,
+                "latitude":    lat,
+                "longitude":   lng,
+                "price":       price,
                 "google_maps": f"https://www.google.com/maps?q={lat},{lng}",
                 "street_view": (
                     f"https://maps.googleapis.com/maps/api/streetview"
                     f"?size=600x300&location={lat},{lng}"
                     f"&key={GOOGLE_MAPS_API_KEY}"
                 ),
-                "created_at": datetime.utcnow().isoformat(),
+                "created_at":  datetime.utcnow().isoformat(),
             })
     return leads
 
 def scrape_craigslist_dallas(limit=20):
-    """Scrape Dallas Craigslist real estate."""
+    """Scrape Dallas Craigslist real estate listings."""
     url = "https://dallas.craigslist.org/search/rea"
     headers = {"User-Agent": "Mozilla/5.0"}
     r = requests.get(url, headers=headers)
@@ -141,21 +144,21 @@ def scrape_craigslist_dallas(limit=20):
         lat, lng = geocode_address(addr)
         if lat and lng:
             leads.append({
-                "source": "Craigslist DFW",
-                "address": addr,
-                "city": "Dallas",
-                "state": "TX",
-                "zip": "",
-                "latitude": lat,
-                "longitude": lng,
-                "price": None,
+                "source":      "Craigslist DFW",
+                "address":     addr,
+                "city":        "Dallas",
+                "state":       "TX",
+                "zip":         "",
+                "latitude":    lat,
+                "longitude":   lng,
+                "price":       None,
                 "google_maps": f"https://www.google.com/maps?q={lat},{lng}",
                 "street_view": (
                     f"https://maps.googleapis.com/maps/api/streetview"
                     f"?size=600x300&location={lat},{lng}"
                     f"&key={GOOGLE_MAPS_API_KEY}"
                 ),
-                "created_at": datetime.utcnow().isoformat(),
+                "created_at":  datetime.utcnow().isoformat(),
             })
     return leads
 
@@ -164,15 +167,15 @@ def scrape_craigslist_dallas(limit=20):
 # ───────────────────────────────────────────────────────────
 
 def run_all_scrapers():
-    zillow     = scrape_zillow_rapidapi_fsbo()
-    craigslist = scrape_craigslist_dallas()
-    all_leads  = zillow + craigslist
+    z_leads = scrape_zillow_rapidapi_fsbo()
+    c_leads = scrape_craigslist_dallas()
+    all_leads = z_leads + c_leads
     for lead in all_leads:
         push_to_supabase(lead)
     return all_leads
 
 # ───────────────────────────────────────────────────────────
-# CSV UPLOAD FLOW
+# CSV UPLOAD & GEOCODE FLOW
 # ───────────────────────────────────────────────────────────
 
 def upload_and_push_csv(csv_file):
@@ -181,7 +184,7 @@ def upload_and_push_csv(csv_file):
         st.error("❌ Your CSV must contain a column named 'Address'")
         return
 
-    # Geocode every address
+    # Geocode each address
     df["Latitude"], df["Longitude"] = zip(
         *df["Address"].map(lambda a: geocode_address(a))
     )
@@ -196,24 +199,26 @@ def upload_and_push_csv(csv_file):
         ),
         axis=1
     )
+
     st.dataframe(df)
 
-    # Push each row
+    # Push each row to Supabase
     for _, row in df.iterrows():
         record = {
-            "source":   "CSV Upload",
-            "address":  row["Address"],
-            "city":     row.get("City", ""),
-            "state":    row.get("State", ""),
-            "zip":      row.get("Zip", ""),
-            "latitude": row.Latitude,
-            "longitude":row.Longitude,
-            "price":    row.get("Price", None),
+            "source":      "CSV Upload",
+            "address":     row["Address"],
+            "city":        row.get("City", ""),
+            "state":       row.get("State", ""),
+            "zip":         row.get("Zip", ""),
+            "latitude":    row.Latitude,
+            "longitude":   row.Longitude,
+            "price":       row.get("Price", None),
             "google_maps": row["Google Maps"],
             "street_view": row["Street View"],
-            "created_at": datetime.utcnow().isoformat(),
+            "created_at":  datetime.utcnow().isoformat(),
         }
         push_to_supabase(record)
+
     st.success("✅ CSV upload + Enrich complete.")
 
 # ───────────────────────────────────────────────────────────
@@ -228,13 +233,13 @@ with tabs[0]:
         upload_and_push_csv(csv_file)
 
 with tabs[1]:
-    if st.button("Scrape FSBO + Craigslist Now"):
-        with st.spinner("Scraping…"):
-            scraped = run_all_scrapers()
-            st.success(f"✅ {len(scraped)} new leads scraped & pushed.")
+    if st.button("Run FSBO + Craigslist Scrape"):
+        with st.spinner("Scraping..."):
+            new_leads = run_all_scrapers()
+            st.success(f"✅ {len(new_leads)} leads scraped & pushed.")
 
 with tabs[2]:
-    st.markdown("### Live Lead Feed (latest 100)")
+    st.subheader("🔍 Live Lead Feed (latest 100)")
     resp = supabase.table("leads")\
         .select("*")\
         .order("created_at", desc=True)\
@@ -244,5 +249,4 @@ with tabs[2]:
     if not df.empty:
         st.dataframe(df)
     else:
-        st.info("No leads yet. Upload or scrape above.")
-
+        st.info("No leads yet – upload CSV or run scraper above!")
