@@ -1,7 +1,7 @@
 streamlit
 pandas
 requests
+beautifulsoup4
 googlemaps
 supabase
 python-dotenv
-beautifulsoup4
