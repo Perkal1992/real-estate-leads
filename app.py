@@ -21,7 +21,7 @@ EMAIL_RECEIVER = "Perkal1992@gmail.com"
 # ───────────────────────────────────────────────────────────
 # Configuration (inline credentials)
 SUPABASE_URL = "https://pwkbszsljlpxhlfcvder.supabase.co"
-SUPABASE_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9..."
+SUPABASE_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InB3a2JzenNsamxweGhsZmN2ZGVyIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NDQzNDk4MDEsImV4cCI6MjA1OTkyNTgwMX0.bjVMzL4X6dN6xBx8tV3lT7XPsOFIEqMLv0pG3y6N-4o"
 GOOGLE_MAPS_API_KEY = "AIzaSyDg-FHCdEFxZCZTy4WUmRryHmDdLto8Ezw"
 RAPIDAPI_KEY = "88a3a41f80msh37d91f3065ad897p19f149jsnab96bb20afbc"
 ZILLOW_COMP_API = "https://zillow-com1.p.rapidapi.com/propertyExtendedSearch"
@@ -82,12 +82,12 @@ def send_email(subject, body):
         print(f"❌ Email failed: {e}")
 
 # ───────────────────────────────────────────────────────────
-# Modified run_all_scrapers with ARV + hot lead filter + email
+# Run All Scrapers with ARV & Hot Lead Email
 # ───────────────────────────────────────────────────────────
 def run_all_scrapers():
     all_leads = []
     hot_leads = []
-    for func in [scrape_zillow, scrape_craigslist, scrape_redfin, scrape_realtor]:
+    for func in [scrape_zillow, scrape_craigslist]:
         try:
             leads = func()
             for lead in leads:
@@ -99,8 +99,7 @@ def run_all_scrapers():
                 if is_hot_lead(lead):
                     hot_leads.append(lead)
         except Exception as e:
-            st.error(f"❌ {func.__name__} failed: {e}")
-    # Only send email if hot leads exist
+            print(f"❌ {func.__name__} failed: {e}")
     if hot_leads:
         lines = [f"{l['address']} - ${l['price']} ARV: ${l.get('arv', 'N/A')} ({l['source']})" for l in hot_leads]
         body = "\n".join(lines)
@@ -108,7 +107,7 @@ def run_all_scrapers():
     return all_leads
 
 # ───────────────────────────────────────────────────────────
-# Background Scheduler
+# Background Scraper Runner (Every 30 minutes)
 # ───────────────────────────────────────────────────────────
 def run_background():
     schedule.every(30).minutes.do(run_all_scrapers)
@@ -119,10 +118,96 @@ def run_background():
 threading.Thread(target=run_background, daemon=True).start()
 
 # ───────────────────────────────────────────────────────────
-# Streamlit UI & Dashboard
+# Geocoding Helper
 # ───────────────────────────────────────────────────────────
-st.set_page_config(page_title="Savory Realty Engine", layout="wide")
+def geocode_address(address):
+    url = (
+        "https://maps.googleapis.com/maps/api/geocode/json"
+        f"?address={requests.utils.quote(address)}&key={GOOGLE_MAPS_API_KEY}"
+    )
+    r = requests.get(url)
+    if not r.ok:
+        return None, None
+    results = r.json().get("results", [])
+    if results:
+        loc = results[0]["geometry"]["location"]
+        return loc["lat"], loc["lng"]
+    return None, None
 
+# ───────────────────────────────────────────────────────────
+# Push to Supabase
+# ───────────────────────────────────────────────────────────
+def push_to_supabase(record):
+    try:
+        supabase.table("leads").insert(record).execute()
+    except Exception as e:
+        print(f"❌ Failed to push lead: {e}")
+
+# ───────────────────────────────────────────────────────────
+# Scraper: Zillow RapidAPI
+# ───────────────────────────────────────────────────────────
+def scrape_zillow():
+    endpoint = "https://zillow-com1.p.rapidapi.com/propertyListings"
+    headers = {
+        "x-rapidapi-host": "zillow-com1.p.rapidapi.com",
+        "x-rapidapi-key": RAPIDAPI_KEY,
+    }
+    leads = []
+    for zip_code in ["75201", "75001", "75006", "75019"]:
+        params = {
+            "propertyStatus": "FOR_SALE",
+            "homeType": ["Houses"],
+            "sort": "Newest",
+            "limit": 20,
+            "zip": zip_code,
+        }
+        r = requests.get(endpoint, headers=headers, params=params)
+        if r.ok:
+            for item in r.json().get("props", []):
+                addr = item.get("address")
+                price = item.get("price")
+                lat, lng = geocode_address(addr)
+                if addr and lat and lng:
+                    leads.append({
+                        "source": "Zillow",
+                        "address": addr,
+                        "latitude": lat,
+                        "longitude": lng,
+                        "price": price,
+                        "created_at": datetime.utcnow().isoformat(),
+                    })
+    return leads
+
+# ───────────────────────────────────────────────────────────
+# Scraper: Craigslist Dallas
+# ───────────────────────────────────────────────────────────
+def scrape_craigslist():
+    url = "https://dallas.craigslist.org/search/rea"
+    headers = {"User-Agent": "Mozilla/5.0"}
+    r = requests.get(url, headers=headers)
+    leads = []
+    if r.ok:
+        soup = BeautifulSoup(r.text, "html.parser")
+        for post in soup.select("li.result-row")[:20]:
+            title = post.select_one("a.result-title")
+            if not title:
+                continue
+            addr = title.get_text(strip=True)
+            lat, lng = geocode_address(addr)
+            if lat and lng:
+                leads.append({
+                    "source": "Craigslist",
+                    "address": addr,
+                    "latitude": lat,
+                    "longitude": lng,
+                    "price": None,
+                    "created_at": datetime.utcnow().isoformat(),
+                })
+    return leads
+# ───────────────────────────────────────────────────────────
+# UI Setup
+# ───────────────────────────────────────────────────────────
+st.set_page_config(page_title="Savory Realty Leads", layout="wide")
 st.markdown("""
 <style>
 body { background-color: #001F1F !important; color: #d9ffcc !important; }
@@ -133,42 +218,18 @@ body { background-color: #001F1F !important; color: #d9ffcc !important; }
 """, unsafe_allow_html=True)
 
 st.title("💚 Savory Realty Lead Engine")
-st.markdown("Pulling fresh leads across Dallas–Fort Worth. ARV estimates included. 🔥")
+st.markdown("Real-time leads, hot deals, and ARV estimates across Dallas-Fort Worth.")
 
-tabs = st.tabs(["📁 Upload CSV", "🔄 Scrape Now", "📊 View Leads"])
-
-with tabs[0]:
-    csv_file = st.file_uploader("Upload CSV of Property Leads", type="csv")
-    if csv_file:
-        df = pd.read_csv(csv_file)
-        df["Latitude"], df["Longitude"] = zip(*df["Address"].map(lambda a: geocode_address(a)))
-        df["ARV"] = df["Address"].map(lambda a: estimate_arv(a))
-        st.dataframe(df)
-        for _, row in df.iterrows():
-            record = {
-                "source": "CSV Upload",
-                "address": row["Address"],
-                "latitude": row.Latitude,
-                "longitude": row.Longitude,
-                "price": row.get("Price", None),
-                "arv": row.get("ARV"),
-                "created_at": datetime.utcnow().isoformat(),
-            }
-            push_to_supabase(record)
-        st.success("✅ CSV uploaded, enriched, and leads pushed.")
-
-with tabs[1]:
-    if st.button("Run DFW Scrapers (All Sources)"):
-        with st.spinner("Scraping..."):
-            new_leads = run_all_scrapers()
-            st.success(f"✅ {len(new_leads)} leads scraped & pushed.")
-
-with tabs[2]:
-    st.subheader("📊 Live Lead Feed (latest 100)")
+# ───────────────────────────────────────────────────────────
+# Leads Dashboard
+# ───────────────────────────────────────────────────────────
+with st.expander("📊 Live Leads Dashboard", expanded=True):
+    st.markdown("### 🔍 Latest 100 Leads")
     data = supabase.table("leads").select("*").order("created_at", desc=True).limit(100).execute()
     df = pd.DataFrame(data.data or [])
     if not df.empty:
         df = df[["address", "price", "arv", "latitude", "longitude", "source", "created_at"]]
+        df["Profit Potential"] = df.apply(lambda row: (row["arv"] - row["price"]) if row["price"] and row["arv"] else None, axis=1)
         st.dataframe(df)
     else:
-        st.info("No leads yet – upload CSV or run scraper.")
+        st.info("No leads available. Try running the scraper or wait for the next auto-run.")
