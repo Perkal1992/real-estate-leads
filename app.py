@@ -1,245 +1,174 @@
-# app.py
-
-import os
 import streamlit as st
 import pandas as pd
 import requests
 from datetime import datetime
 from supabase import create_client, Client
 from bs4 import BeautifulSoup
-from config import SUPABASE_URL, SUPABASE_KEY, GOOGLE_MAPS_API_KEY, RAPIDAPI_KEY
+import time
+import logging
+import smtplib
+from email.mime.text import MIMEText
+import schedule
+import threading
 
-# ------------------------------------------------------------------------------
-# Initialize Supabase client (uses env / secrets in config.py)
-# ------------------------------------------------------------------------------
+# ───────────────────────────────────────────────────────────
+# Email Setup
+# ───────────────────────────────────────────────────────────
+EMAIL_SENDER = "Perkal1992@gmail.com"
+EMAIL_PASSWORD = "your_app_password"
+EMAIL_RECEIVER = "Perkal1992@gmail.com"
+
+# ───────────────────────────────────────────────────────────
+# Configuration (inline credentials)
+SUPABASE_URL = "https://pwkbszsljlpxhlfcvder.supabase.co"
+SUPABASE_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9..."
+GOOGLE_MAPS_API_KEY = "AIzaSyDg-FHCdEFxZCZTy4WUmRryHmDdLto8Ezw"
+RAPIDAPI_KEY = "88a3a41f80msh37d91f3065ad897p19f149jsnab96bb20afbc"
+ZILLOW_COMP_API = "https://zillow-com1.p.rapidapi.com/propertyExtendedSearch"
+
 supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 
-# ------------------------------------------------------------------------------
-# Streamlit page config (MUST BE FIRST Streamlit COMMAND)
-# ------------------------------------------------------------------------------
-st.set_page_config(
-    page_title="🏘️ Savory Realty Investments",
-    layout="wide",
-)
-
-# ------------------------------------------------------------------------------
-# Black‑marble background + form/theme styling
-# ------------------------------------------------------------------------------
-st.markdown(
-    """
-    <style>
-      body, .stApp {
-        background-color: #1c1c1c !important;
-        background-image: url("https://www.transparenttextures.com/patterns/black-marble.png") !important;
-        background-size: cover !important;
-        color: #f0f0f0 !important;
-      }
-      .stFileUploader, .stTextInput, .stButton, .stSelectbox {
-        background-color: rgba(0,0,0,0.4) !important;
-        color: #f0f0f0 !important;
-      }
-    </style>
-    """,
-    unsafe_allow_html=True,
-)
-
-# ------------------------------------------------------------------------------
-# Title + Description
-# ------------------------------------------------------------------------------
-st.title("🏘️ Savory Realty Investments")
-st.markdown(
-    "Upload a CSV of property addresses or run live scrapers for FSBO/off‑market deals in Dallas County."
-)
-
-# ------------------------------------------------------------------------------
-# Utility: Geocode an address via Google Maps API
-# ------------------------------------------------------------------------------
-def geocode_address(address: str):
-    """Returns (lat, lng) or (None, None)."""
-    url = (
-        "https://maps.googleapis.com/maps/api/geocode/json"
-        f"?address={requests.utils.quote(address)}"
-        f"&key={GOOGLE_MAPS_API_KEY}"
-    )
-    resp = requests.get(url)
-    if resp.ok:
-        data = resp.json()
-        if data.get("status") == "OK":
-            loc = data["results"][0]["geometry"]["location"]
-            return loc["lat"], loc["lng"]
-    return None, None
-
-# ------------------------------------------------------------------------------
-# Utility: Push a single lead record to Supabase
-# ------------------------------------------------------------------------------
-def push_to_supabase(record: dict):
+# ───────────────────────────────────────────────────────────
+# Hot Lead Filter (price < $200,000)
+# ───────────────────────────────────────────────────────────
+def is_hot_lead(lead):
     try:
-        supabase.table("leads").insert(record).execute()
-    except Exception as e:
-        st.warning(f"❌ Failed to insert lead: {e}")
+        return lead.get("price") and int(lead["price"]) < 200000
+    except:
+        return False
 
-# ------------------------------------------------------------------------------
-# Scraper: Zillow FSBO via RapidAPI
-# ------------------------------------------------------------------------------
-def scrape_zillow_rapidapi_fsbo(zip_code="75201", limit=20):
-    endpoint = "https://zillow-com1.p.rapidapi.com/propertyListings"
-    params = {
-        "propertyStatus": "FOR_SALE",
-        "homeType": ["Houses"],
-        "sort": "Newest",
-        "limit": str(limit),
-        "zip": zip_code,
-    }
+# ───────────────────────────────────────────────────────────
+# ARV Estimator using Zillow comps (basic average of nearby solds)
+# ───────────────────────────────────────────────────────────
+def estimate_arv(address):
     headers = {
-        "x-rapidapi-host": "zillow-com1.p.rapidapi.com",
-        "x-rapidapi-key": RAPIDAPI_KEY,
+        "X-RapidAPI-Key": RAPIDAPI_KEY,
+        "X-RapidAPI-Host": "zillow-com1.p.rapidapi.com",
     }
-    r = requests.get(endpoint, headers=headers, params=params)
-    leads = []
-    if r.ok:
-        data = r.json()
-        for item in data.get("props", []):
-            addr = item.get("address")
-            price = item.get("price")
-            lat, lng = geocode_address(addr) if addr else (None, None)
-            if addr and lat and lng:
-                leads.append({
-                    "source": "Zillow FSBO (RapidAPI)",
-                    "address": addr,
-                    "city": "",
-                    "state": "TX",
-                    "zip": zip_code,
-                    "latitude": lat,
-                    "longitude": lng,
-                    "price": price,
-                    "google_maps": f"https://www.google.com/maps?q={lat},{lng}",
-                    "street_view": (
-                      f"https://maps.googleapis.com/maps/api/streetview"
-                      f"?size=600x300&location={lat},{lng}"
-                      f"&key={GOOGLE_MAPS_API_KEY}"
-                    ),
-                    "created_at": datetime.utcnow().isoformat(),
-                })
-    return leads
+    params = {
+        "location": address,
+        "status_type": "recently_sold",
+        "home_type": "Houses",
+        "sort": "sold_date",
+        "limit": 10
+    }
+    try:
+        r = requests.get(ZILLOW_COMP_API, headers=headers, params=params)
+        if r.status_code != 200:
+            return None
+        comps = r.json().get("props", [])
+        sold_prices = [c.get("price") for c in comps if c.get("price")]
+        if not sold_prices:
+            return None
+        return int(sum(sold_prices) / len(sold_prices))
+    except:
+        return None
 
-# ------------------------------------------------------------------------------
-# Scraper: Craigslist Dallas real estate listings
-# ------------------------------------------------------------------------------
-def scrape_craigslist_dallas(limit=20):
-    url = "https://dallas.craigslist.org/search/rea"
-    headers = {"User-Agent": "Mozilla/5.0"}
-    resp = requests.get(url, headers=headers)
-    leads = []
-    if resp.ok:
-        soup = BeautifulSoup(resp.text, "html.parser")
-        postings = soup.select("li.result-row")[:limit]
-        for post in postings:
-            title = post.select_one("a.result-title")
-            if not title:
-                continue
-            addr = title.get_text(strip=True)
-            lat, lng = geocode_address(addr)
-            if lat and lng:
-                leads.append({
-                    "source": "Craigslist DFW",
-                    "address": addr,
-                    "city": "Dallas",
-                    "state": "TX",
-                    "zip": "",
-                    "latitude": lat,
-                    "longitude": lng,
-                    "price": None,
-                    "google_maps": f"https://www.google.com/maps?q={lat},{lng}",
-                    "street_view": (
-                      f"https://maps.googleapis.com/maps/api/streetview"
-                      f"?size=600x300&location={lat},{lng}"
-                      f"&key={GOOGLE_MAPS_API_KEY}"
-                    ),
-                    "created_at": datetime.utcnow().isoformat(),
-                })
-    return leads
+# ───────────────────────────────────────────────────────────
+# Email Notification
+# ───────────────────────────────────────────────────────────
+def send_email(subject, body):
+    msg = MIMEText(body)
+    msg["Subject"] = subject
+    msg["From"] = EMAIL_SENDER
+    msg["To"] = EMAIL_RECEIVER
+    try:
+        server = smtplib.SMTP_SSL("smtp.gmail.com", 465)
+        server.login(EMAIL_SENDER, EMAIL_PASSWORD)
+        server.send_message(msg)
+        server.quit()
+        print("✅ Email sent")
+    except Exception as e:
+        print(f"❌ Email failed: {e}")
 
-# ------------------------------------------------------------------------------
-# Crawl both sources & push leads
-# ------------------------------------------------------------------------------
+# ───────────────────────────────────────────────────────────
+# Modified run_all_scrapers with ARV + hot lead filter + email
+# ───────────────────────────────────────────────────────────
 def run_all_scrapers():
-    z_leads = scrape_zillow_rapidapi_fsbo()
-    c_leads = scrape_craigslist_dallas()
-    all_leads = z_leads + c_leads
-    for lead in all_leads:
-        push_to_supabase(lead)
+    all_leads = []
+    hot_leads = []
+    for func in [scrape_zillow, scrape_craigslist, scrape_redfin, scrape_realtor]:
+        try:
+            leads = func()
+            for lead in leads:
+                arv = estimate_arv(lead.get("address", ""))
+                if arv:
+                    lead["arv"] = arv
+                push_to_supabase(lead)
+                all_leads.append(lead)
+                if is_hot_lead(lead):
+                    hot_leads.append(lead)
+        except Exception as e:
+            st.error(f"❌ {func.__name__} failed: {e}")
+    # Only send email if hot leads exist
+    if hot_leads:
+        lines = [f"{l['address']} - ${l['price']} ARV: ${l.get('arv', 'N/A')} ({l['source']})" for l in hot_leads]
+        body = "\n".join(lines)
+        send_email("🔥 Hot Leads Found", body)
     return all_leads
 
-# ------------------------------------------------------------------------------
-# CSV Upload & Enrich ➞ push to Supabase
-# ------------------------------------------------------------------------------
-def upload_csv_and_push(file):
-    df = pd.read_csv(file)
-    if "Address" not in df.columns:
-        st.error("❌ Your CSV must contain a column named 'Address'")
-        return
+# ───────────────────────────────────────────────────────────
+# Background Scheduler
+# ───────────────────────────────────────────────────────────
+def run_background():
+    schedule.every(30).minutes.do(run_all_scrapers)
+    while True:
+        schedule.run_pending()
+        time.sleep(1)
 
-    # Geocode each address
-    df["Latitude"], df["Longitude"] = zip(
-        *df["Address"].apply(lambda a: geocode_address(a))
-    )
-    df["Google Maps"] = df.apply(
-        lambda r: f"https://www.google.com/maps?q={r.Latitude},{r.Longitude}",
-        axis=1,
-    )
-    df["Street View"] = df.apply(
-        lambda r: (
-            f"https://maps.googleapis.com/maps/api/streetview"
-            f"?size=600x300&location={r.Latitude},{r.Longitude}"
-            f"&key={GOOGLE_MAPS_API_KEY}"
-        ),
-        axis=1,
-    )
+threading.Thread(target=run_background, daemon=True).start()
 
-    # Show enriched DataFrame
-    st.dataframe(df)
+# ───────────────────────────────────────────────────────────
+# Streamlit UI & Dashboard
+# ───────────────────────────────────────────────────────────
+st.set_page_config(page_title="Savory Realty Engine", layout="wide")
 
-    # Push rows to Supabase
-    for _, row in df.iterrows():
-        push_to_supabase({
-            "source": "CSV Upload",
-            "address": row["Address"],
-            "city": row.get("City", ""),
-            "state": row.get("State", ""),
-            "zip": row.get("Zip", ""),
-            "latitude": row.Latitude,
-            "longitude": row.Longitude,
-            "price": row.get("Price", None),
-            "google_maps": row["Google Maps"],
-            "street_view": row["Street View"],
-            "created_at": datetime.utcnow().isoformat(),
-        })
-    st.success("✅ CSV upload + enrich complete!")
+st.markdown("""
+<style>
+body { background-color: #001F1F !important; color: #d9ffcc !important; }
+.stApp { background-color: #001F1F !important; }
+[data-testid="stHeader"] { background-color: #003333; color: #d9ffcc; }
+.stButton > button { background-color: #00ff00 !important; color: #000000 !important; font-weight: bold; }
+</style>
+""", unsafe_allow_html=True)
 
-# ------------------------------------------------------------------------------
-# Streamlit Tabs: Upload CSV | Live Scrape | View Leads
-# ------------------------------------------------------------------------------
-tabs = st.tabs(["📁 Upload CSV", "🔄 Live Scrape", "📊 View Leads"])
+st.title("💚 Savory Realty Lead Engine")
+st.markdown("Pulling fresh leads across Dallas–Fort Worth. ARV estimates included. 🔥")
+
+tabs = st.tabs(["📁 Upload CSV", "🔄 Scrape Now", "📊 View Leads"])
 
 with tabs[0]:
-    uploaded_file = st.file_uploader("Upload property CSV", type="csv")
-    if uploaded_file:
-        upload_csv_and_push(uploaded_file)
+    csv_file = st.file_uploader("Upload CSV of Property Leads", type="csv")
+    if csv_file:
+        df = pd.read_csv(csv_file)
+        df["Latitude"], df["Longitude"] = zip(*df["Address"].map(lambda a: geocode_address(a)))
+        df["ARV"] = df["Address"].map(lambda a: estimate_arv(a))
+        st.dataframe(df)
+        for _, row in df.iterrows():
+            record = {
+                "source": "CSV Upload",
+                "address": row["Address"],
+                "latitude": row.Latitude,
+                "longitude": row.Longitude,
+                "price": row.get("Price", None),
+                "arv": row.get("ARV"),
+                "created_at": datetime.utcnow().isoformat(),
+            }
+            push_to_supabase(record)
+        st.success("✅ CSV uploaded, enriched, and leads pushed.")
 
 with tabs[1]:
-    if st.button("Run live scrapers now"):
-        with st.spinner("Scraping Zillow FSBO & Craigslist..."):
+    if st.button("Run DFW Scrapers (All Sources)"):
+        with st.spinner("Scraping..."):
             new_leads = run_all_scrapers()
-            st.success(f"✅ {len(new_leads)} leads scraped & stored.")
+            st.success(f"✅ {len(new_leads)} leads scraped & pushed.")
 
 with tabs[2]:
-    st.subheader("Supabase — Most Recent Leads")
-    resp = (
-        supabase.table("leads")
-        .select("*")
-        .order("created_at", desc=True)
-        .limit(100)
-        .execute()
-    )
-    data = resp.data or []
-    st.dataframe(pd.DataFrame(data))
+    st.subheader("📊 Live Lead Feed (latest 100)")
+    data = supabase.table("leads").select("*").order("created_at", desc=True).limit(100).execute()
+    df = pd.DataFrame(data.data or [])
+    if not df.empty:
+        df = df[["address", "price", "arv", "latitude", "longitude", "source", "created_at"]]
+        st.dataframe(df)
+    else:
+        st.info("No leads yet – upload CSV or run scraper.")
