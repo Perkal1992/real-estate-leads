@@ -1,235 +1,322 @@
 import streamlit as st
 import pandas as pd
+import numpy as np
+import os, time, threading
 import requests
 from datetime import datetime
-from supabase import create_client, Client
-from bs4 import BeautifulSoup
-import time
-import logging
+
+# Optional: for scheduling tasks and sending emails
+import schedule
 import smtplib
 from email.mime.text import MIMEText
-import schedule
-import threading
+from bs4 import BeautifulSoup  # for parsing Craigslist results
 
-# ───────────────────────────────────────────────────────────
-# Email Setup
-# ───────────────────────────────────────────────────────────
-EMAIL_SENDER = "Perkal1992@gmail.com"
-EMAIL_PASSWORD = "your_app_password"
-EMAIL_RECEIVER = "Perkal1992@gmail.com"
+from supabase import create_client
 
-# ───────────────────────────────────────────────────────────
-# Configuration (inline credentials)
-SUPABASE_URL = "https://pwkbszsljlpxhlfcvder.supabase.co"
-SUPABASE_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InB3a2JzenNsamxweGhsZmN2ZGVyIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NDQzNDk4MDEsImV4cCI6MjA1OTkyNTgwMX0.bjVMzL4X6dN6xBx8tV3lT7XPsOFIEqMLv0pG3y6N-4o"
-GOOGLE_MAPS_API_KEY = "AIzaSyDg-FHCdEFxZCZTy4WUmRryHmDdLto8Ezw"
-RAPIDAPI_KEY = "88a3a41f80msh37d91f3065ad897p19f149jsnab96bb20afbc"
-ZILLOW_COMP_API = "https://zillow-com1.p.rapidapi.com/propertyExtendedSearch"
-
-supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
-
-# ───────────────────────────────────────────────────────────
-# Hot Lead Filter (price < $200,000)
-# ───────────────────────────────────────────────────────────
-def is_hot_lead(lead):
-    try:
-        return lead.get("price") and int(lead["price"]) < 200000
-    except:
-        return False
-
-# ───────────────────────────────────────────────────────────
-# ARV Estimator using Zillow comps (basic average of nearby solds)
-# ───────────────────────────────────────────────────────────
-def estimate_arv(address):
-    headers = {
-        "X-RapidAPI-Key": RAPIDAPI_KEY,
-        "X-RapidAPI-Host": "zillow-com1.p.rapidapi.com",
-    }
-    params = {
-        "location": address,
-        "status_type": "recently_sold",
-        "home_type": "Houses",
-        "sort": "sold_date",
-        "limit": 10
-    }
-    try:
-        r = requests.get(ZILLOW_COMP_API, headers=headers, params=params)
-        if r.status_code != 200:
-            return None
-        comps = r.json().get("props", [])
-        sold_prices = [c.get("price") for c in comps if c.get("price")]
-        if not sold_prices:
-            return None
-        return int(sum(sold_prices) / len(sold_prices))
-    except:
-        return None
-
-# ───────────────────────────────────────────────────────────
-# Email Notification
-# ───────────────────────────────────────────────────────────
-def send_email(subject, body):
-    msg = MIMEText(body)
-    msg["Subject"] = subject
-    msg["From"] = EMAIL_SENDER
-    msg["To"] = EMAIL_RECEIVER
-    try:
-        server = smtplib.SMTP_SSL("smtp.gmail.com", 465)
-        server.login(EMAIL_SENDER, EMAIL_PASSWORD)
-        server.send_message(msg)
-        server.quit()
-        print("✅ Email sent")
-    except Exception as e:
-        print(f"❌ Email failed: {e}")
-
-# ───────────────────────────────────────────────────────────
-# Run All Scrapers with ARV & Hot Lead Email
-# ───────────────────────────────────────────────────────────
-def run_all_scrapers():
-    all_leads = []
-    hot_leads = []
-    for func in [scrape_zillow, scrape_craigslist]:
-        try:
-            leads = func()
-            for lead in leads:
-                arv = estimate_arv(lead.get("address", ""))
-                if arv:
-                    lead["arv"] = arv
-                push_to_supabase(lead)
-                all_leads.append(lead)
-                if is_hot_lead(lead):
-                    hot_leads.append(lead)
-        except Exception as e:
-            print(f"❌ {func.__name__} failed: {e}")
-    if hot_leads:
-        lines = [f"{l['address']} - ${l['price']} ARV: ${l.get('arv', 'N/A')} ({l['source']})" for l in hot_leads]
-        body = "\n".join(lines)
-        send_email("🔥 Hot Leads Found", body)
-    return all_leads
-
-# ───────────────────────────────────────────────────────────
-# Background Scraper Runner (Every 30 minutes)
-# ───────────────────────────────────────────────────────────
-def run_background():
-    schedule.every(30).minutes.do(run_all_scrapers)
-    while True:
-        schedule.run_pending()
-        time.sleep(1)
-
-threading.Thread(target=run_background, daemon=True).start()
-
-# ───────────────────────────────────────────────────────────
-# Geocoding Helper
-# ───────────────────────────────────────────────────────────
-def geocode_address(address):
-    url = (
-        "https://maps.googleapis.com/maps/api/geocode/json"
-        f"?address={requests.utils.quote(address)}&key={GOOGLE_MAPS_API_KEY}"
-    )
-    r = requests.get(url)
-    if not r.ok:
-        return None, None
-    results = r.json().get("results", [])
-    if results:
-        loc = results[0]["geometry"]["location"]
-        return loc["lat"], loc["lng"]
-    return None, None
-
-# ───────────────────────────────────────────────────────────
-# Push to Supabase
-# ───────────────────────────────────────────────────────────
-def push_to_supabase(record):
-    try:
-        supabase.table("leads").insert(record).execute()
-    except Exception as e:
-        print(f"❌ Failed to push lead: {e}")
-
-# ───────────────────────────────────────────────────────────
-# Scraper: Zillow RapidAPI
-# ───────────────────────────────────────────────────────────
-def scrape_zillow():
-    endpoint = "https://zillow-com1.p.rapidapi.com/propertyListings"
-    headers = {
-        "x-rapidapi-host": "zillow-com1.p.rapidapi.com",
-        "x-rapidapi-key": RAPIDAPI_KEY,
-    }
-    leads = []
-    for zip_code in ["75201", "75001", "75006", "75019"]:
-        params = {
-            "propertyStatus": "FOR_SALE",
-            "homeType": ["Houses"],
-            "sort": "Newest",
-            "limit": 20,
-            "zip": zip_code,
-        }
-        r = requests.get(endpoint, headers=headers, params=params)
-        if r.ok:
-            for item in r.json().get("props", []):
-                addr = item.get("address")
-                price = item.get("price")
-                lat, lng = geocode_address(addr)
-                if addr and lat and lng:
-                    leads.append({
-                        "source": "Zillow",
-                        "address": addr,
-                        "latitude": lat,
-                        "longitude": lng,
-                        "price": price,
-                        "created_at": datetime.utcnow().isoformat(),
-                    })
-    return leads
-
-# ───────────────────────────────────────────────────────────
-# Scraper: Craigslist Dallas
-# ───────────────────────────────────────────────────────────
-def scrape_craigslist():
-    url = "https://dallas.craigslist.org/search/rea"
-    headers = {"User-Agent": "Mozilla/5.0"}
-    r = requests.get(url, headers=headers)
-    leads = []
-    if r.ok:
-        soup = BeautifulSoup(r.text, "html.parser")
-        for post in soup.select("li.result-row")[:20]:
-            title = post.select_one("a.result-title")
-            if not title:
-                continue
-            addr = title.get_text(strip=True)
-            lat, lng = geocode_address(addr)
-            if lat and lng:
-                leads.append({
-                    "source": "Craigslist",
-                    "address": addr,
-                    "latitude": lat,
-                    "longitude": lng,
-                    "price": None,
-                    "created_at": datetime.utcnow().isoformat(),
-                })
-    return leads
-# ───────────────────────────────────────────────────────────
-# UI Setup
-# ───────────────────────────────────────────────────────────
-st.set_page_config(page_title="Savory Realty Leads", layout="wide")
+# --- Page Config and Custom UI Styling ---
+st.set_page_config(page_title="DFW Real Estate Leads", page_icon="📊", layout="wide")
+# Custom CSS for dark theme and styling
 st.markdown("""
 <style>
-body { background-color: #001F1F !important; color: #d9ffcc !important; }
-.stApp { background-color: #001F1F !important; }
-[data-testid="stHeader"] { background-color: #003333; color: #d9ffcc; }
-.stButton > button { background-color: #00ff00 !important; color: #000000 !important; font-weight: bold; }
+/* Set background color and text color */
+[data-testid="stAppViewContainer"] {
+    background-color: #0e1117;
+    color: #FFFFFF;
+}
+/* Style for DataFrame header and cells */
+[data-testid="stDataFrame"] table {
+    color: #FFFFFF;
+    border-radius: 8px;
+    overflow: hidden;
+}
 </style>
 """, unsafe_allow_html=True)
 
-st.title("💚 Savory Realty Lead Engine")
-st.markdown("Real-time leads, hot deals, and ARV estimates across Dallas-Fort Worth.")
+# --- Initialize Supabase Client ---
+SUPABASE_URL = os.getenv("SUPABASE_URL") or st.secrets.get("SUPABASE_URL")
+SUPABASE_KEY = os.getenv("SUPABASE_KEY") or st.secrets.get("SUPABASE_KEY")
+supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
 
-# ───────────────────────────────────────────────────────────
-# Leads Dashboard
-# ───────────────────────────────────────────────────────────
+# --- Optional: Email alert configuration from environment or secrets ---
+EMAIL_USER = os.getenv("EMAIL_USER") or st.secrets.get("EMAIL_USER")
+EMAIL_PASS = os.getenv("EMAIL_PASS") or st.secrets.get("EMAIL_PASS")
+ALERT_EMAIL = os.getenv("ALERT_EMAIL") or st.secrets.get("ALERT_EMAIL")
+
+# --- Define Scraper Functions for Zillow and Craigslist ---
+def scrape_zillow():
+    """Scrape Zillow for new leads (returns list of lead dicts)."""
+    leads = []
+    # Example Zillow search URL for Dallas-Fort Worth area (could be adjusted as needed)
+    search_url = "https://www.zillow.com/homes/Dallas-Fort-Worth_rb/"
+    headers = {"User-Agent": "Mozilla/5.0"}
+    try:
+        res = requests.get(search_url, headers=headers, timeout=15)
+    except Exception as e:
+        print("Error connecting to Zillow:", e)
+        return leads
+    if res.status_code != 200:
+        print("Failed to fetch Zillow page, status code:", res.status_code)
+        return leads
+    # Parse Zillow page content for listings (Zillow embeds JSON in the page)
+    text = res.text
+    # Find the JSON that contains search results
+    idx = text.find('"searchResults":')
+    if idx != -1:
+        try:
+            start_idx = text.index('{', idx)
+            end_idx = text.index(',"usersSearchTerm"', start_idx)  # end of searchResults JSON
+            search_json_str = text[start_idx:end_idx]
+            # Load the JSON data
+            data = None
+            data = eval(search_json_str)  # using eval to parse the JSON snippet (Zillow's JSON uses Python-like syntax for booleans and None)
+        except Exception as e:
+            try:
+                # Fallback: attempt json.loads with some replacements if eval failed
+                import json
+                json_str = search_json_str.replace("null", "null").replace("true", "true").replace("false", "false")
+                data = json.loads(json_str)
+            except Exception as e2:
+                print("Error parsing Zillow JSON:", e, e2)
+                data = None
+        if data and isinstance(data, dict):
+            # Zillow JSON structure: data["searchResults"]["listResults"] contains list of properties
+            results = []
+            if "searchResults" in data:
+                if "listResults" in data["searchResults"]:
+                    results = data["searchResults"]["listResults"]
+            elif "cat1" in data:  # alternate JSON path (Zillow often changes structure)
+                results = data.get("cat1", {}).get("searchResults", {}).get("listResults", [])
+            for item in results:
+                address = item.get('address') or item.get('statusText') or "Unknown Address"
+                price = None
+                if item.get('unformattedPrice') is not None:
+                    # Zillow provides unformattedPrice as a number if available
+                    price = item['unformattedPrice']
+                elif item.get('price'):
+                    # price might be string like "$123,456"
+                    price_str = item['price']
+                    try:
+                        price = int(price_str.replace("$", "").replace(",", "").strip())
+                    except:
+                        price = None
+                # Coordinates
+                lat = item.get('latLong', {}).get('latitude')
+                lon = item.get('latLong', {}).get('longitude')
+                url = item.get('detailUrl')
+                source = "Zillow"
+                created_at = datetime.utcnow().isoformat()
+                # ARV estimation (use Zillow's zestimate if available as ARV)
+                arv = None
+                zestimate = item.get('zestimate') or item.get('variableData', {}).get('zestimate')
+                if zestimate:
+                    try:
+                        arv = int(float(zestimate))
+                    except:
+                        arv = None
+                # Profit Potential calculation (ARV - price if both available)
+                profit = None
+                if price is not None and arv is not None:
+                    profit = arv - price
+                lead = {
+                    "address": address,
+                    "price": price,
+                    "lat": lat,
+                    "lon": lon,
+                    "url": url,
+                    "source": source,
+                    "created_at": created_at
+                }
+                if arv is not None:
+                    lead["arv"] = arv
+                if profit is not None:
+                    lead["profit"] = profit
+                leads.append(lead)
+    return leads
+
+def scrape_craigslist():
+    """Scrape Craigslist for new leads (returns list of lead dicts)."""
+    leads = []
+    base_url = "https://dallas.craigslist.org"
+    search_path = "/search/rea?query=fixer+upper&sort=date"  # looking for "fixer upper" in real estate section
+    try:
+        res = requests.get(base_url + search_path, headers={"User-Agent": "Mozilla/5.0"}, timeout=10)
+    except Exception as e:
+        print("Error connecting to Craigslist:", e)
+        return leads
+    if res.status_code != 200:
+        print("Failed to fetch Craigslist results, status code:", res.status_code)
+        return leads
+    soup = BeautifulSoup(res.text, 'html.parser')
+    postings = soup.find_all('li', class_='result-row')
+    for post in postings:
+        a = post.find('a', class_='result-title')
+        price_elem = post.find('span', class_='result-price')
+        time_elem = post.find('time', class_='result-date')
+        if not a:
+            continue
+        address = a.text.strip()
+        url = a['href']
+        price = None
+        if price_elem:
+            try:
+                price = int(price_elem.text.strip().strip("$").replace(",", ""))
+            except:
+                price = None
+        # Craigslist's result-date time datetime attribute
+        posted_time = time_elem['datetime'] if time_elem else None
+        created_at = datetime.utcnow().isoformat()
+        lead = {
+            "address": address,
+            "price": price,
+            "url": url,
+            "source": "Craigslist",
+            "created_at": created_at
+        }
+        # (No ARV/profit for Craigslist leads by default)
+        leads.append(lead)
+    return leads
+
+def push_leads_to_supabase(leads):
+    """Insert new leads into Supabase (avoid duplicates by unique URL)."""
+    if not leads:
+        return
+    for lead in leads:
+        try:
+            # Use upsert on URL to avoid duplicating the same listing
+            supabase.table("leads").upsert(lead, on_conflict="url").execute()
+        except Exception as e:
+            print(f"Supabase insert error for {lead.get('address')}: {e}")
+
+def send_email_alert(lead):
+    """Send an email alert for a hot lead."""
+    if not (EMAIL_USER and EMAIL_PASS and ALERT_EMAIL):
+        return  # Email credentials not configured
+    try:
+        address = lead.get('address', 'N/A')
+        price = lead.get('price')
+        arv = lead.get('arv')
+        profit = lead.get('profit')
+        # Compose email content
+        subject = f"🔥 New Real Estate Lead: {address}"
+        lines = [f"Address: {address}"]
+        if price is not None:
+            lines.append(f"Price: ${price:,.0f}")
+        if arv is not None:
+            lines.append(f"ARV: ${arv:,.0f}")
+        if profit is not None:
+            lines.append(f"Profit Potential: ${profit:,.0f}")
+        lines.append(f"Source: {lead.get('source')}")
+        if lead.get('url'):
+            lines.append(f"Listing: {lead['url']}")
+        body = "\n".join(lines)
+        msg = MIMEText(body)
+        msg['Subject'] = subject
+        msg['From'] = EMAIL_USER
+        msg['To'] = ALERT_EMAIL
+        server = smtplib.SMTP("smtp.gmail.com", 587)
+        server.starttls()
+        server.login(EMAIL_USER, EMAIL_PASS)
+        server.sendmail(EMAIL_USER, [ALERT_EMAIL], msg.as_string())
+        server.quit()
+        print(f"Alert email sent for lead: {address}")
+    except Exception as e:
+        print("Failed to send email alert:", e)
+
+def run_all_scrapers():
+    """Run both Zillow and Craigslist scrapers, push new leads, and send alerts."""
+    new_leads = []
+    try:
+        zillow_leads = scrape_zillow()
+        craigslist_leads = scrape_craigslist()
+        # Combine leads from both sources
+        for lead in (zillow_leads or []):
+            new_leads.append(lead)
+        for lead in (craigslist_leads or []):
+            new_leads.append(lead)
+    except Exception as e:
+        print("Error during scraping:", e)
+    if not new_leads:
+        return
+    # Push to Supabase and send alerts for qualifying leads
+    push_leads_to_supabase(new_leads)
+    for lead in new_leads:
+        # Determine if this lead should trigger an email (e.g., has profit and it's high, or very low price)
+        prof = lead.get('profit')
+        if prof is not None and prof > 50000:
+            send_email_alert(lead)
+        elif prof is None:
+            # If no profit info, maybe alert if price is below a threshold
+            price = lead.get('price') or 0
+            if price > 0 and price < 100000:
+                send_email_alert(lead)
+
+# --- Background Scheduling of Scrapers (runs periodically) ---
+if 'scheduler_thread' not in st.session_state:
+    st.session_state.scheduler_thread = True
+    # Schedule scrapers to run every 4 hours (for example)
+    schedule.every(4).hours.do(run_all_scrapers)
+    def scheduler_runner():
+        while True:
+            schedule.run_pending()
+            time.sleep(60)  # check every minute
+    threading.Thread(target=scheduler_runner, daemon=True).start()
+
+# If an environment flag is set to run scrapers (for CI/cron usage), run once and exit
+if os.getenv("RUN_SCRAPERS") or os.getenv("SCRAPE_ONLY"):
+    run_all_scrapers()
+    st.stop()
+
+# --- Streamlit App UI ---
+st.title("🏠 DFW Real Estate Leads Dashboard")
+st.write("Real-time leads, hot deals, and ARV estimates across Dallas-Fort Worth.")
+
+# Expandable section for the live leads table
 with st.expander("📊 Live Leads Dashboard", expanded=True):
-    st.markdown("### 🔍 Latest 100 Leads")
-    data = supabase.table("leads").select("*").order("created_at", desc=True).limit(100).execute()
-    df = pd.DataFrame(data.data or [])
-    if not df.empty:
-        df = df[["address", "price", "arv", "latitude", "longitude", "source", "created_at"]]
-        df["Profit Potential"] = df.apply(lambda row: (row["arv"] - row["price"]) if row["price"] and row["arv"] else None, axis=1)
-        st.dataframe(df)
+    # Query the latest 100 leads from Supabase, sorted by newest first
+    try:
+        res = supabase.table("leads").select("*").order("created_at", ascending=False).limit(100).execute()
+        leads_data = res.data  # list of records
+    except Exception as e:
+        st.error(f"Error fetching leads from database: {e}")
+        leads_data = None
+    if not leads_data or len(leads_data) == 0:
+        st.write("No leads available to display at this time.")
     else:
-        st.info("No leads available. Try running the scraper or wait for the next auto-run.")
+        df = pd.DataFrame(leads_data)
+        # Ensure numeric columns are numeric types
+        for col in ["price", "arv", "profit"]:
+            if col in df.columns:
+                df[col] = pd.to_numeric(df[col], errors='coerce')
+        # Compute profit on the fly if not present in data but price and arv are available
+        if "profit" not in df.columns and "price" in df.columns and "arv" in df.columns:
+            df["profit"] = df["arv"] - df["price"]
+        # Define the order of columns to display
+        desired_columns = ["created_at", "address", "price", "arv", "profit", "source"]
+        display_columns = [c for c in desired_columns if c in df.columns]
+        df_display = df[display_columns].copy()
+        # Convert created_at to datetime and then format for display
+        if "created_at" in df_display.columns:
+            df_display["created_at"] = pd.to_datetime(df_display["created_at"])
+            # Sort by created_at descending (newest first)
+            df_display.sort_values("created_at", ascending=False, inplace=True)
+            df_display["created_at"] = df_display["created_at"].dt.strftime("%Y-%m-%d %H:%M:%S")
+        # Format numeric columns as currency strings for display
+        if "price" in df_display.columns:
+            df_display["price"] = df_display["price"].apply(lambda x: f"${x:,.0f}" if pd.notnull(x) else "")
+        if "arv" in df_display.columns:
+            df_display["arv"] = df_display["arv"].apply(lambda x: f"${x:,.0f}" if pd.notnull(x) else "")
+        if "profit" in df_display.columns:
+            df_display["profit"] = df_display["profit"].apply(lambda x: f"${x:,.0f}" if pd.notnull(x) else "")
+        # Rename columns for a nicer display heading
+        df_display.rename(columns={
+            "created_at": "Date Added",
+            "address": "Address",
+            "price": "Price",
+            "arv": "ARV",
+            "profit": "Profit Potential",
+            "source": "Source"
+        }, inplace=True)
+        # Reset index so it doesn't show the dataframe index
+        df_display.reset_index(drop=True, inplace=True)
+        # Display the table in the app
+        st.dataframe(df_display, use_container_width=True)
