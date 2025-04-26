@@ -38,9 +38,17 @@ SUPABASE_KEY = os.getenv("SUPABASE_KEY") or st.secrets.get("SUPABASE_KEY")
 supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
 
 # --- Optional: Email alert configuration from environment or secrets ---
-EMAIL_USER = os.getenv("EMAIL_USER") or st.secrets.get("EMAIL_USER")
-EMAIL_PASS = os.getenv("EMAIL_PASS") or st.secrets.get("EMAIL_PASS")
-ALERT_EMAIL = os.getenv("ALERT_EMAIL") or st.secrets.get("ALERT_EMAIL")
+# --- Optional: Email alert configuration (safe fallback if secrets.toml missing) ---
+EMAIL_USER = os.getenv("EMAIL_USER")
+EMAIL_PASS = os.getenv("EMAIL_PASS")
+ALERT_EMAIL = os.getenv("ALERT_EMAIL")
+
+if not EMAIL_USER:
+    print("⚠️ WARNING: EMAIL_USER not set. Email alerts disabled.")
+if not EMAIL_PASS:
+    print("⚠️ WARNING: EMAIL_PASS not set. Email alerts disabled.")
+if not ALERT_EMAIL:
+    print("⚠️ WARNING: ALERT_EMAIL not set. Email alerts disabled.")
 
 # --- Define Scraper Functions for Zillow and Craigslist ---
 def scrape_zillow():
