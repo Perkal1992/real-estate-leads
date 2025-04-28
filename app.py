@@ -54,6 +54,11 @@ EMAIL_PASS = "your_app_password"  # Replace with your real Gmail App Password
 ALERT_EMAIL = "Perkal1992@gmail.com"
 
 supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
+# --- TEMPORARY FORCE SCRAPER ---
+if st.button("🔄 Force Scrape (Dev Only)"):
+    st.write("Scraping now...")
+    run_all_scrapers()
+    st.success("✅ Scrape completed.")
 
 # --- Geocoding ---
 def geocode_address(address):
