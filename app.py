@@ -11,7 +11,25 @@ from bs4 import BeautifulSoup
 from supabase import create_client
 
 # --- Page Config and Styling ---
-st.set_page_config(page_title="Savory Realty Leads", page_icon="🏡", layout="wide")
+st.set_page_config(page_title="Savory Realty Leads", page_icon="🏡", layout="centered")
+st.markdown("""
+<style>
+[data-testid="stAppViewContainer"] {
+    background-color: #0e1117;
+    color: #FFFFFF;
+    padding: 1rem;
+}
+[data-testid="stDataFrame"] table {
+    color: #FFFFFF;
+    overflow-x: auto;
+    border-radius: 8px;
+}
+button[kind="secondary"] {
+    width: 100%;
+}
+</style>
+""", unsafe_allow_html=True)
+
 st.markdown("""
 <style>
 [data-testid="stAppViewContainer"] {
