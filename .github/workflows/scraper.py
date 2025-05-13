@@ -1,13 +1,23 @@
-#!/usr/bin/env python3
 import os
 import requests
 from datetime import datetime
-from supabase import create_client, Client
 from bs4 import BeautifulSoup
-from config import SUPABASE_URL, SUPABASE_KEY, GOOGLE_MAPS_API_KEY, RAPIDAPI_KEY
 
-# Initialize Supabase client
+# Local fallback for dev; in CI these come from GitHub Secrets
+try:
+    import config
+    _local = True
+except ImportError:
+    _local = False
+
+SUPABASE_URL        = os.getenv("SUPABASE_URL",        config.SUPABASE_URL if _local else None)
+SUPABASE_KEY        = os.getenv("SUPABASE_KEY",        config.SUPABASE_KEY if _local else None)
+GOOGLE_MAPS_API_KEY = os.getenv("GOOGLE_MAPS_API_KEY", config.GOOGLE_MAPS_API_KEY if _local else None)
+RAPIDAPI_KEY        = os.getenv("RAPIDAPI_KEY",        config.RAPIDAPI_KEY if _local else None)
+
+from supabase import create_client, Client
 supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
+
 
 def geocode_address(address: str):
     url = (
