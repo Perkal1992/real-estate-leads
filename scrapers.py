@@ -1,107 +1,131 @@
-import requests, re
+#!/usr/bin/env python3
+import os
+import requests
+import re
 from datetime import datetime
-from bs4 import BeautifulSoup
+from bs4 import BeautifulSoup   # ← fixed typo here
 from supabase import create_client, Client
 
-SUPABASE_URL = "https://pwkbszsljlpxhlfcvder.supabase.co"
-SUPABASE_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InB3a2JzenNsamxweGhsZmN2ZGVyIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NDQzNDk4MDEsImV4cCI6MjA1OTkyNTgwMX0.bjVMzL4X6dN6xBx8tV3lT7XPsOFIEqMLv0pG3y6N-4o"
+# ──────── DEBUG: Sanity‐check CI env & working dir ────────
+print("🔍 RUNNING scrapers.py from:", os.getcwd())
+for var in ("SUPABASE_URL","SUPABASE_KEY","RAPIDAPI_KEY","GOOGLE_MAPS_API_KEY"):
+    print(f"🔑 {var:21} length:", len(os.getenv(var,"")))
+
+# ──────── Credentials & Supabase Init ────────
+try:
+    import config
+    _local = True
+except ImportError:
+    _local = False
+
+SUPABASE_URL        = os.getenv("SUPABASE_URL",        config.SUPABASE_URL        if _local else None)
+SUPABASE_KEY        = os.getenv("SUPABASE_KEY",        config.SUPABASE_KEY        if _local else None)
+RAPIDAPI_KEY        = os.getenv("RAPIDAPI_KEY",        config.RAPIDAPI_KEY        if _local else None)
+GOOGLE_MAPS_API_KEY = os.getenv("GOOGLE_MAPS_API_KEY", config.GOOGLE_MAPS_API_KEY if _local else None)
+
 supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 
 HEADERS = {"User-Agent": "Mozilla/5.0"}
 HOT_WORDS = ["motivated", "cash", "as-is", "urgent", "must sell", "investor", "fast", "cheap"]
 
-def is_hot(text): return any(w in text.lower() for w in HOT_WORDS) if text else False
-def normalize_price(val): return int(re.sub(r'[^0-9]', '', str(val))) if val else None
+def is_hot(text: str) -> bool:
+    return any(w in text.lower() for w in HOT_WORDS) if text else False
 
-def push_to_supabase(leads):
+def normalize_price(val) -> int|None:
+    if not val: return None
+    digits = re.sub(r'[^0-9]', '', str(val))
+    return int(digits) if digits else None
+
+def push_to_supabase(leads: list[dict]):
     for lead in leads:
         try:
             supabase.table("leads").insert(lead).execute()
-            print("Pushed:", lead['title'])
+            print("✅ Pushed:", lead.get("title"))
         except Exception as e:
-            print("Failed:", e)
+            print("❌ Push failed:", e)
 
-def scrape_zillow():
-    print("Scraping Zillow...")
+def scrape_zillow() -> list[dict]:
+    print("📡 Scraping Zillow…")
     url = "https://zillow-com1.p.rapidapi.com/propertyExtendedSearch"
     headers = {
-        "X-RapidAPI-Key": "88a3a41f80msh37d91f3065ad897p19f149jsnab96bb20afbc",
+        "X-RapidAPI-Key": RAPIDAPI_KEY,
         "X-RapidAPI-Host": "zillow-com1.p.rapidapi.com"
     }
     leads = []
     try:
-        r = requests.get(url, headers=headers, params={"location":"Dallas, TX", "status_type":"ForSaleByOwner"})
-        for prop in r.json().get("props", []):
+        resp = requests.get(url, headers=headers, params={"location":"Dallas, TX","status_type":"ForSaleByOwner"})
+        data = resp.json().get("props", [])
+        for prop in data:
             desc = f"{prop.get('bedrooms','')}bd {prop.get('bathrooms','')}ba {prop.get('livingArea','')} sqft"
             leads.append({
-                "title": prop.get("addressStreet", "Zillow FSBO"),
+                "title":       prop.get("addressStreet","Zillow FSBO"),
                 "description": desc,
-                "price": normalize_price(prop.get("price")),
-                "city": prop.get("addressCity", "Dallas"),
-                "zip": prop.get("addressZipcode", ""),
-                "source": "Zillow FSBO",
-                "hot_lead": is_hot(desc),
-                "created_at": datetime.utcnow().isoformat()
+                "price":       normalize_price(prop.get("price")),
+                "city":        prop.get("addressCity","Dallas"),
+                "zip":         prop.get("addressZipcode",""),
+                "source":      "Zillow FSBO",
+                "hot_lead":    is_hot(desc),
+                "created_at":  datetime.utcnow().isoformat()
             })
     except Exception as e:
-        print("Zillow error:", e)
+        print("⚠ Zillow error:", e)
     return leads
 
-def scrape_craigslist():
-    print("Scraping Craigslist...")
+def scrape_craigslist() -> list[dict]:
+    print("📡 Scraping Craigslist…")
     leads = []
     try:
-        r = requests.get("https://dallas.craigslist.org/search/rea?hasPic=1", headers=HEADERS)
-        soup = BeautifulSoup(r.text, "html.parser")
-        for post in soup.find_all("li", class_="result-row"):
-            title = post.find("a", class_="result-title").text.strip()
-            link = post.find("a", class_="result-title")["href"]
-            price = post.find("span", class_="result-price")
-            desc = f"Craigslist: {link}"
+        resp = requests.get("https://dallas.craigslist.org/search/rea?hasPic=1", headers=HEADERS)
+        soup = BeautifulSoup(resp.text, "html.parser")
+        for post in soup.select("li.result-row"):
+            title = post.select_one("a.result-title").text.strip()
+            link  = post.select_one("a.result-title")["href"]
+            price = post.select_one("span.result-price")
+            desc  = f"Craigslist link: {link}"
             leads.append({
-                "title": title,
+                "title":       title,
                 "description": desc,
-                "price": normalize_price(price.text) if price else None,
-                "city": "DFW",
-                "zip": "",
-                "source": "Craigslist",
-                "hot_lead": is_hot(title + desc),
-                "created_at": datetime.utcnow().isoformat()
+                "price":       normalize_price(price.text if price else None),
+                "city":        "DFW",
+                "zip":         "",
+                "source":      "Craigslist",
+                "hot_lead":    is_hot(title + " " + desc),
+                "created_at":  datetime.utcnow().isoformat()
             })
     except Exception as e:
-        print("Craigslist error:", e)
+        print("⚠ Craigslist error:", e)
     return leads
 
-def scrape_facebook():
-    print("Scraping Facebook Marketplace...")
+def scrape_facebook() -> list[dict]:
+    print("📡 Scraping Facebook Marketplace…")
     url = "https://facebook-marketplace1.p.rapidapi.com/search"
     headers = {
         "x-rapidapi-host": "facebook-marketplace1.p.rapidapi.com",
-        "x-rapidapi-key": "88a3a41f80msh37d91f3065ad897p19f149jsnab96bb20afbc"
+        "x-rapidapi-key":  RAPIDAPI_KEY
     }
     leads = []
     try:
-        r = requests.get(url, headers=headers, params={"sort": "newest", "city": "Dallas", "daysSinceListed": "1"})
-        for i in r.json().get("data", []):
-            title = i.get("marketplace_listing_title", "FB Listing")
-            desc = f"Facebook: {i.get('permalink')}"
+        resp = requests.get(url, headers=headers, params={"sort":"newest","city":"Dallas","daysSinceListed":"1"})
+        for item in resp.json().get("listings", []):
+            title = item.get("marketplace_listing_title","FB Listing")
+            desc  = f"FB: {item.get('permalink')}"
             leads.append({
-                "title": title,
+                "title":       title,
                 "description": desc,
-                "price": normalize_price(i.get("listing_price")),
-                "city": "Dallas",
-                "zip": "",
-                "source": "Facebook Marketplace",
-                "hot_lead": is_hot(title + desc),
-                "created_at": datetime.utcnow().isoformat()
+                "price":       normalize_price(item.get("listing_price")),
+                "city":        "Dallas",
+                "zip":         "",
+                "source":      "Facebook Marketplace",
+                "hot_lead":    is_hot(title + " " + desc),
+                "created_at":  datetime.utcnow().isoformat()
             })
     except Exception as e:
-        print("Facebook error:", e)
+        print("⚠ Facebook error:", e)
     return leads
 
 def main():
     all_leads = scrape_zillow() + scrape_craigslist() + scrape_facebook()
-    print(f"Total scraped: {len(all_leads)}")
+    print(f"📊 Total scraped: {len(all_leads)}")
     push_to_supabase(all_leads)
 
 if __name__ == "__main__":
