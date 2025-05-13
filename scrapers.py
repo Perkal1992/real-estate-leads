@@ -3,13 +3,13 @@ import os
 import requests
 import re
 from datetime import datetime
-from bs4 import BeautifulSoup   # ← fixed typo here
+from bs4 import BeautifulSoup
 from supabase import create_client, Client
 
 # ──────── DEBUG: Sanity‐check CI env & working dir ────────
 print("🔍 RUNNING scrapers.py from:", os.getcwd())
 for var in ("SUPABASE_URL","SUPABASE_KEY","RAPIDAPI_KEY","GOOGLE_MAPS_API_KEY"):
-    print(f"🔑 {var:21} length:", len(os.getenv(var,"")))
+    print(f"🔑 {var:21} length:", len(os.getenv(var, "")))
 
 # ──────── Credentials & Supabase Init ────────
 try:
@@ -53,19 +53,25 @@ def scrape_zillow() -> list[dict]:
     }
     leads = []
     try:
-        resp = requests.get(url, headers=headers, params={"location":"Dallas, TX","status_type":"ForSaleByOwner"})
-        data = resp.json().get("props", [])
+        params = {"location": "Dallas, TX", "status_type": "ForSaleByOwner"}
+        print(f"🔗 Zillow → GET {url} params={params}")
+        resp = requests.get(url, headers=headers, params=params)
+        print("📥 Zillow status:", resp.status_code)
+        j = resp.json()
+        print("📦 Zillow JSON keys:", list(j.keys()))
+        data = j.get("props", [])
+        print("📊 Zillow 'props' count:", len(data))
         for prop in data:
             desc = f"{prop.get('bedrooms','')}bd {prop.get('bathrooms','')}ba {prop.get('livingArea','')} sqft"
             leads.append({
-                "title":       prop.get("addressStreet","Zillow FSBO"),
+                "title": prop.get("addressStreet", "Zillow FSBO"),
                 "description": desc,
-                "price":       normalize_price(prop.get("price")),
-                "city":        prop.get("addressCity","Dallas"),
-                "zip":         prop.get("addressZipcode",""),
-                "source":      "Zillow FSBO",
-                "hot_lead":    is_hot(desc),
-                "created_at":  datetime.utcnow().isoformat()
+                "price": normalize_price(prop.get("price")),
+                "city": prop.get("addressCity", "Dallas"),
+                "zip": prop.get("addressZipcode", ""),
+                "source": "Zillow FSBO",
+                "hot_lead": is_hot(desc),
+                "created_at": datetime.utcnow().isoformat()
             })
     except Exception as e:
         print("⚠ Zillow error:", e)
@@ -75,22 +81,27 @@ def scrape_craigslist() -> list[dict]:
     print("📡 Scraping Craigslist…")
     leads = []
     try:
-        resp = requests.get("https://dallas.craigslist.org/search/rea?hasPic=1", headers=HEADERS)
+        url = "https://dallas.craigslist.org/search/rea?hasPic=1"
+        print(f"🔗 Craigslist → GET {url}")
+        resp = requests.get(url, headers=HEADERS)
+        print("📥 Craigslist status:", resp.status_code)
         soup = BeautifulSoup(resp.text, "html.parser")
-        for post in soup.select("li.result-row"):
+        posts = soup.select("li.result-row")
+        print("📊 Craigslist result-row count:", len(posts))
+        for post in posts:
             title = post.select_one("a.result-title").text.strip()
-            link  = post.select_one("a.result-title")["href"]
+            link = post.select_one("a.result-title")["href"]
             price = post.select_one("span.result-price")
-            desc  = f"Craigslist link: {link}"
+            desc = f"Craigslist link: {link}"
             leads.append({
-                "title":       title,
+                "title": title,
                 "description": desc,
-                "price":       normalize_price(price.text if price else None),
-                "city":        "DFW",
-                "zip":         "",
-                "source":      "Craigslist",
-                "hot_lead":    is_hot(title + " " + desc),
-                "created_at":  datetime.utcnow().isoformat()
+                "price": normalize_price(price.text if price else None),
+                "city": "DFW",
+                "zip": "",
+                "source": "Craigslist",
+                "hot_lead": is_hot(title + " " + desc),
+                "created_at": datetime.utcnow().isoformat()
             })
     except Exception as e:
         print("⚠ Craigslist error:", e)
@@ -101,23 +112,30 @@ def scrape_facebook() -> list[dict]:
     url = "https://facebook-marketplace1.p.rapidapi.com/search"
     headers = {
         "x-rapidapi-host": "facebook-marketplace1.p.rapidapi.com",
-        "x-rapidapi-key":  RAPIDAPI_KEY
+        "x-rapidapi-key": RAPIDAPI_KEY
     }
     leads = []
     try:
-        resp = requests.get(url, headers=headers, params={"sort":"newest","city":"Dallas","daysSinceListed":"1"})
-        for item in resp.json().get("listings", []):
-            title = item.get("marketplace_listing_title","FB Listing")
-            desc  = f"FB: {item.get('permalink')}"
+        params = {"sort": "newest", "city": "Dallas", "daysSinceListed": "1"}
+        print(f"🔗 Facebook → GET {url} params={params}")
+        resp = requests.get(url, headers=headers, params=params)
+        print("📥 Facebook status:", resp.status_code)
+        j = resp.json()
+        print("📦 Facebook JSON keys:", list(j.keys()))
+        listings = j.get("listings", j.get("data", []))
+        print("📊 Facebook listings count:", len(listings))
+        for item in listings:
+            title = item.get("marketplace_listing_title", "FB Listing")
+            desc = f"FB: {item.get('permalink')}"
             leads.append({
-                "title":       title,
+                "title": title,
                 "description": desc,
-                "price":       normalize_price(item.get("listing_price")),
-                "city":        "Dallas",
-                "zip":         "",
-                "source":      "Facebook Marketplace",
-                "hot_lead":    is_hot(title + " " + desc),
-                "created_at":  datetime.utcnow().isoformat()
+                "price": normalize_price(item.get("listing_price")),
+                "city": "Dallas",
+                "zip": "",
+                "source": "Facebook Marketplace",
+                "hot_lead": is_hot(title + " " + desc),
+                "created_at": datetime.utcnow().isoformat()
             })
     except Exception as e:
         print("⚠ Facebook error:", e)
