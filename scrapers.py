@@ -3,13 +3,14 @@ import os
 import requests
 import re
 from datetime import datetime
-from bs4 import BeautifulSoup
+from bs4 import BeautifulSoup   # ← fixed typo here
 from supabase import create_client, Client
 
 # ──────── DEBUG: Sanity‐check CI env & working dir ────────
 print("🔍 RUNNING scrapers.py from:", os.getcwd())
 for var in ("SUPABASE_URL","SUPABASE_KEY","RAPIDAPI_KEY","GOOGLE_MAPS_API_KEY"):
-    print(f"🔑 {var:21} length:", len(os.getenv(var, "")))
+    val = os.getenv(var, "") or ""
+    print(f"🔑 {var:21} length:", len(val))
 
 # ──────── Credentials & Supabase Init ────────
 try:
@@ -18,10 +19,16 @@ try:
 except ImportError:
     _local = False
 
-SUPABASE_URL        = os.getenv("SUPABASE_URL",        config.SUPABASE_URL        if _local else None)
-SUPABASE_KEY        = os.getenv("SUPABASE_KEY",        config.SUPABASE_KEY        if _local else None)
-RAPIDAPI_KEY        = os.getenv("RAPIDAPI_KEY",        config.RAPIDAPI_KEY        if _local else None)
-GOOGLE_MAPS_API_KEY = os.getenv("GOOGLE_MAPS_API_KEY", config.GOOGLE_MAPS_API_KEY if _local else None)
+# Strip any accidental whitespace/newlines from secrets
+raw_url = os.getenv("SUPABASE_URL", config.SUPABASE_URL if _local else None)
+raw_key = os.getenv("SUPABASE_KEY", config.SUPABASE_KEY if _local else None)
+raw_rapid = os.getenv("RAPIDAPI_KEY", config.RAPIDAPI_KEY if _local else None)
+raw_maps = os.getenv("GOOGLE_MAPS_API_KEY", config.GOOGLE_MAPS_API_KEY if _local else None)
+
+SUPABASE_URL        = raw_url.strip() if isinstance(raw_url, str) else raw_url
+SUPABASE_KEY        = raw_key.strip() if isinstance(raw_key, str) else raw_key
+RAPIDAPI_KEY        = raw_rapid.strip() if isinstance(raw_rapid, str) else raw_rapid
+GOOGLE_MAPS_API_KEY = raw_maps.strip() if isinstance(raw_maps, str) else raw_maps
 
 supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 
@@ -112,7 +119,7 @@ def scrape_facebook() -> list[dict]:
     url = "https://facebook-marketplace1.p.rapidapi.com/search"
     headers = {
         "x-rapidapi-host": "facebook-marketplace1.p.rapidapi.com",
-        "x-rapidapi-key": RAPIDAPI_KEY
+        "x-rapidapi-key":  RAPIDAPI_KEY
     }
     leads = []
     try:
