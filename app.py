@@ -1,19 +1,25 @@
+import os
 import streamlit as st
 import pandas as pd
 from supabase import create_client, Client
 
-# ──────── Supabase Configuration ────────
-SUPABASE_URL = "https://pwkbszsljlpxhlfcvder.supabase.co"
-SUPABASE_KEY = (
-    "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9."
-    "eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InB3a2JzenNsamxweGhsZmN2ZGVyIiwicm9sZSI6ImFub24iLC"
-    "JpYXQiOjE3NDQzNDk4MDEsImV4cCI6MjA1OTkyNTgwMX0."
-    "bjVMzL4X6dN6xBx8tV3lT7XPsOFIEqMLv0pG3y6N-4o"
-)
+# ──────── Credentials & Supabase Init ────────
+# Try env-vars first (for CI/GitHub Actions), fall back to local config.py
+try:
+    import config
+    _local = True
+except ImportError:
+    _local = False
+
+SUPABASE_URL        = os.getenv("SUPABASE_URL",        config.SUPABASE_URL        if _local else None)
+SUPABASE_KEY        = os.getenv("SUPABASE_KEY",        config.SUPABASE_KEY        if _local else None)
+GOOGLE_MAPS_API_KEY = os.getenv("GOOGLE_MAPS_API_KEY", config.GOOGLE_MAPS_API_KEY if _local else None)
+RAPIDAPI_KEY        = os.getenv("RAPIDAPI_KEY",        config.RAPIDAPI_KEY        if _local else None)
+
 supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 
 # ──────── Streamlit Config & Theme ────────
-st.set_page_config("Savory Realty Lead Engine", layout="wide")
+st.set_page_config(page_title="Savory Realty Lead Engine", layout="wide")
 st.markdown(
     """
     <style>
@@ -38,7 +44,14 @@ st.caption("Real-time leads. Flagged hot deals. Instant updates from DFW sources
 st.subheader("Latest Leads (Supabase Synced)")
 
 try:
-    response = supabase.table("leads").select("*").order("created_at", desc=True).limit(100).execute()
+    response = (
+        supabase
+        .table("leads")
+        .select("*")
+        .order("created_at", desc=True)
+        .limit(100)
+        .execute()
+    )
     df = pd.DataFrame(response.data)
 
     if df.empty:
@@ -46,5 +59,6 @@ try:
     else:
         df["created_at"] = pd.to_datetime(df["created_at"]).dt.strftime("%Y-%m-%d %H:%M")
         st.dataframe(df, use_container_width=True)
+
 except Exception as err:
     st.error(f"Failed to retrieve leads: {err}")

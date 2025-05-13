@@ -1,8 +1,7 @@
 streamlit
 pandas
 requests
-beautifulsoup4      # <‑‑ bs4 error disappears
-supabase
-googlemaps
 schedule
-
+beautifulsoup4
+supabase
+email-validator
