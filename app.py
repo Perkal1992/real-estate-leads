@@ -10,6 +10,22 @@ from email.mime.text import MIMEText
 from bs4 import BeautifulSoup
 from supabase import create_client
 
+import os
+# ... other imports ...
+
+# Fallback to config.py locally
+try:
+    import config
+    _local = True
+except ImportError:
+    _local = False
+
+SUPABASE_URL = os.getenv("SUPABASE_URL", config.SUPABASE_URL if _local else None)
+SUPABASE_KEY = os.getenv("SUPABASE_KEY", config.SUPABASE_KEY if _local else None)
+
+from supabase import create_client, Client
+supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
+
 # --- Page Config and Styling ---
 st.set_page_config(page_title="Savory Realty Leads", page_icon="🏡", layout="centered")
 st.markdown("""
