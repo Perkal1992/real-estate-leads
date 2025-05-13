@@ -37,6 +37,7 @@ def geocode_address(address: str):
         return loc["lat"], loc["lng"]
     return None, None
 
+
 def scrape_zillow_rapidapi_fsbo(zip_code="75201", limit=20):
     endpoint = "https://zillow-com1.p.rapidapi.com/propertyListings"
     params = {
@@ -76,6 +77,7 @@ def scrape_zillow_rapidapi_fsbo(zip_code="75201", limit=20):
             })
     return leads
 
+
 def scrape_craigslist_dallas(limit=20):
     url = "https://dallas.craigslist.org/search/rea"
     headers = {"User-Agent": "Mozilla/5.0"}
@@ -107,6 +109,7 @@ def scrape_craigslist_dallas(limit=20):
                 "created_at": datetime.utcnow().isoformat(),
             })
     return leads
+
 
 def scrape_facebook_marketplace(city="Dallas", days_since=1, limit=20):
     url = "https://facebook-marketplace1.p.rapidapi.com/search"
@@ -149,6 +152,7 @@ def scrape_facebook_marketplace(city="Dallas", days_since=1, limit=20):
         })
     return leads
 
+
 def run_all_scrapers(zip_codes=None, limit=20):
     if zip_codes is None:
         zip_codes = ["75201"]
@@ -166,3 +170,20 @@ def run_all_scrapers(zip_codes=None, limit=20):
     print(f"  → Craigslist returned {len(c_leads)} leads")
 
     print("Scraping Facebook Marketplace…")
+    f_leads = scrape_facebook_marketplace(limit=limit)
+    print(f"  → FB Marketplace returned {len(f_leads)} leads")
+
+    # 2) Combine all
+    all_leads = z_leads + c_leads + f_leads
+    print(f"Total scraped: {len(all_leads)}")
+
+    # 3) Push to Supabase
+    for lead in all_leads:
+        supabase.table("leads").insert(lead).execute()
+
+    print(f"✅ Scraped & pushed {len(all_leads)} leads")
+    return all_leads
+
+
+if __name__ == "__main__":
+    run_all_scrapers()
