@@ -5,8 +5,11 @@ from supabase import create_client, Client
 from datetime import datetime
 
 # ---------- Configuration ----------
+# If your code lives in real-estate-leads-complete/, place the assets folder there
+# and reference the logo with a relative path
 SUPABASE_URL = os.environ.get("SUPABASE_URL")
 SUPABASE_KEY = os.environ.get("SUPABASE_KEY")
+# Logo path relative to this app.py file (assets folder inside real-estate-leads-complete)
 BG_IMAGE_PATH = "assets/sri_dallas_skyline.png"
 
 # Initialize Supabase client
