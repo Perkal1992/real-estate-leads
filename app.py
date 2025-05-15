@@ -80,7 +80,7 @@ options = [f"{row['name']} (ID: {row['id']})" for _, row in leads_df.iterrows()]
 default = options if select_all else []
 selected = st.multiselect("Select leads to delete:", options, default=default)
 if st.button("Delete Selected"):
-    ids_to_delete = [int(item.split("ID:")[1].rstrip(")").strip() ) for item in selected]
+    ids_to_delete = [int(item.split("ID:")[1].rstrip(")").strip()) for item in selected]
     if ids_to_delete:
         supabase.table("leads").delete().in_("id", ids_to_delete).execute()
         st.success(f"Deleted {len(ids_to_delete)} lead(s). Refreshing...")
@@ -89,8 +89,7 @@ if st.button("Delete Selected"):
 # ---------- Live Leads Dashboard ----------
 st.subheader("📈 Live Leads Dashboard")
 if not leads_df.empty:
-    # Drop internal columns or re-order as desired
-display_df = leads_df.drop(columns=["id"]) if "id" in leads_df.columns else leads_df
+    display_df = leads_df.drop(columns=["id"]) if "id" in leads_df.columns else leads_df
     st.dataframe(display_df, use_container_width=True)
 
     # Hot Leads Alert
