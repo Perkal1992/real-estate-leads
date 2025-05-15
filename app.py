@@ -1,13 +1,16 @@
+import os
 import streamlit as st
 import pandas as pd
 from supabase import create_client, Client
 from datetime import datetime
 
 # ---------- Configuration ----------
-# Replace these paths/keys with your actual values or use Streamlit secrets
-SUPABASE_URL = st.secrets.get("SUPABASE_URL")  # e.g., "https://pwkbszsljlpxhlfcvder.supabase.co"
-SUPABASE_KEY = st.secrets.get("SUPABASE_KEY")  # your anon key
-LOGO_PATH = "/mnt/data/A_logo_for_Savory_Realty_Investments_(SRI)_is_set_.png"  # local logo file path
+# Read Supabase credentials from environment variables
+SUPABASE_URL = os.environ.get("SUPABASE_URL")
+SUPABASE_KEY = os.environ.get("SUPABASE_KEY")
+
+# Path to your Dallas skyline logo file in the assets folder
+LOGO_PATH = "assets/sri_dallas_skyline.png"
 
 # Initialize Supabase client
 supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
@@ -15,8 +18,8 @@ supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 # ---------- Streamlit Page Setup ----------
 st.set_page_config(page_title="Savory Lead Machine", layout="wide")
 
-# Header
-st.image(LOGO_PATH, width=250)
+# Header with Dallas skyline logo
+st.image(LOGO_PATH, width=300)
 st.title("🏘️ Savory Realty Lead Machine")
 
 # ---------- Sidebar Filters ----------
@@ -37,12 +40,8 @@ with st.expander("➕ Add New Lead"):
         address = st.text_input("Property Address")
         city = st.text_input("City")
         zip_code = st.text_input("ZIP Code")
-        source = st.selectbox(
-            "Lead Source", ["FSBO", "Craigslist", "Driving for Dollars", "Manual", "Other"]
-        )
-        status = st.selectbox(
-            "Status", ["New", "Hot", "Follow-up", "Dead"]
-        )
+        source = st.selectbox("Lead Source", ["FSBO", "Craigslist", "Driving for Dollars", "Manual", "Other"])
+        status = st.selectbox("Status", ["New", "Hot", "Follow-up", "Dead"])
         follow_up_date = st.date_input("Next Follow-up Date")
         notes = st.text_area("Notes")
         submit = st.form_submit_button(label="Add Lead")
@@ -80,7 +79,7 @@ options = [f"{row['name']} (ID: {row['id']})" for _, row in leads_df.iterrows()]
 default = options if select_all else []
 selected = st.multiselect("Select leads to delete:", options, default=default)
 if st.button("Delete Selected"):
-    ids_to_delete = [int(item.split("ID:")[1].rstrip(")").strip()) for item in selected]
+    ids_to_delete = [int(item.split("ID:")[1].rstrip(")")) for item in selected]
     if ids_to_delete:
         supabase.table("leads").delete().in_("id", ids_to_delete).execute()
         st.success(f"Deleted {len(ids_to_delete)} lead(s). Refreshing...")
@@ -92,10 +91,9 @@ if not leads_df.empty:
     display_df = leads_df.drop(columns=["id"]) if "id" in leads_df.columns else leads_df
     st.dataframe(display_df, use_container_width=True)
 
-    # Hot Leads Alert
     hot_leads = leads_df[leads_df["status"] == "Hot"]
     if not hot_leads.empty:
         st.markdown("## 🔥 HOT LEADS ALERT")
         st.table(hot_leads[["name", "phone", "address", "follow_up_date"]])
 else:
-    st.info("No leads found. Use the form above to add new leads.")
+    st.info("No leads to display. Add some above!")
