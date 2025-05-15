@@ -1,115 +1,118 @@
-import os
 import streamlit as st
 import pandas as pd
-from supabase import create_client, Client
+import requests
 from datetime import datetime
 
-# ---------- Configuration ----------
-# Read Supabase credentials from environment variables
-SUPABASE_URL = os.environ.get("SUPABASE_URL")
-SUPABASE_KEY = os.environ.get("SUPABASE_KEY")
+# Configure your Google Maps API key via Streamlit secrets
+GOOGLE_MAPS_API_KEY = st.secrets["GOOGLE_MAPS_API_KEY"]  # Ensure this is set in your Streamlit secrets
 
-# Path to your Dallas skyline logo file in the assets folder (used as background)
-BG_IMAGE_PATH = "assets/sri_dallas_skyline.png"
+# Page setup
+st.set_page_config(
+    page_title="Savory Realty Investments Lead Engine",
+    layout="wide"
+)
 
-# Initialize Supabase client
-supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
-
-# ---------- Streamlit Page Setup ----------
-st.set_page_config(page_title="Savory Lead Machine", layout="wide")
-
-# ---------- Background Styling ----------
-page_bg = f'''
-<style>
-    /* Full-page background */
-    .stApp {{
-        background-image: url("{BG_IMAGE_PATH}");
-        background-size: cover;
-        background-position: center;
-    }}
-    /* Semi-transparent content container to improve readability */
-    .css-18e3th9 {{
-        background-color: rgba(0, 0, 0, 0.6);
-        padding: 2rem;
-        border-radius: 0.5rem;
-    }}
-</style>
-'''
-st.markdown(page_bg, unsafe_allow_html=True)
-
-# ---------- Header ----------
+# Custom styling
 st.markdown("""
-<h1 style='color: gold; text-align: center; margin-bottom: 1rem;'>🏘️ Savory Realty Lead Machine</h1>
+<style>
+body {background-color:#001F1F!important;color:#d9ffcc!important;}
+.stApp {background-color:#001F1F!important;}
+[data-testid=\"stHeader\"] {background-color:#003333;color:#d9ffcc;}
+.stButton>button {background-color:#00ff00!important;color:#000;font-weight:bold;}
+</style>
 """, unsafe_allow_html=True)
 
-# ---------- Sidebar Filters ----------
-st.sidebar.header("🔍 Filter Leads")
-status_filter = st.sidebar.selectbox("Status", ["All", "New", "Hot", "Follow-up", "Dead"], index=0)
-source_filter = st.sidebar.selectbox("Source", ["All", "FSBO", "Craigslist", "Driving for Dollars", "Manual", "Other"], index=0)
+# App title and description
+st.title("🏘️ Savory Realty Investments Lead Engine")
+st.markdown("Drag & drop CSV files to process leads with ARV estimates and map & Street View links for DFW properties.")
 
-# ---------- Add New Lead Form ----------
-with st.expander("➕ Add New Lead"):
-    with st.form(key="lead_form"):
-        name = st.text_input("Name")
-        phone = st.text_input("Phone")
-        email = st.text_input("Email")
-        address = st.text_input("Property Address")
-        city = st.text_input("City")
-        zip_code = st.text_input("ZIP Code")
-        source = st.selectbox("Lead Source", ["FSBO", "Craigslist", "Driving for Dollars", "Manual", "Other"])
-        status = st.selectbox("Status", ["New", "Hot", "Follow-up", "Dead"])
-        follow_up_date = st.date_input("Next Follow-up Date")
-        notes = st.text_area("Notes")
-        submit = st.form_submit_button(label="Add Lead")
+# File uploader
+uploaded_files = st.file_uploader(
+    "Drag & drop CSV files here",
+    type="csv",
+    accept_multiple_files=True
+)
 
-        if submit:
-            new_lead = {
-                "name": name,
-                "phone": phone,
-                "email": email,
-                "address": address,
-                "city": city,
-                "zip": zip_code,
-                "source": source,
-                "status": status,
-                "follow_up_date": follow_up_date.strftime("%Y-%m-%d"),
-                "notes": notes,
-                "created_at": datetime.utcnow().isoformat()
-            }
-            supabase.table("leads").insert(new_lead).execute()
-            st.success("🚀 Lead added to your pipeline!")
+if uploaded_files:
+    # Read and concatenate all uploaded CSVs
+    df_list = [pd.read_csv(file) for file in uploaded_files]
+    df = pd.concat(df_list, ignore_index=True)
+    st.write(f"Loaded {len(df)} records from {len(uploaded_files)} file(s)")
 
-# ---------- Fetch & Filter Leads ----------
-response = supabase.table("leads").select("*").order("created_at", desc=True).execute()
-leads_df = pd.DataFrame(response.data)
-if status_filter != "All":
-    leads_df = leads_df[leads_df["status"] == status_filter]
-if source_filter != "All":
-    leads_df = leads_df[leads_df["source"] == source_filter]
+    # Organization & filtering options
+    st.subheader("🛠️ Organize & Filter Leads")
+    col1, col2 = st.columns(2)
+    with col1:
+        # Remove duplicates
+        if st.checkbox("Remove duplicate addresses"):
+            before = len(df)
+            df = df.drop_duplicates(subset=["Address"] if "Address" in df.columns else df.columns.tolist())
+            dropped = before - len(df)
+            st.write(f"Dropped {dropped} duplicates.")
 
-# ---------- Remove Leads UI ----------
-if "name" in leads_df.columns and "id" in leads_df.columns:
-    st.subheader("🗑️ Remove Leads")
-    select_all = st.checkbox("Select All Leads", key="select_all")
-    options = [f"{row['name']} (ID: {row['id']})" for _, row in leads_df.iterrows()]
-    default = options if select_all else []
-    selected = st.multiselect("Select leads to delete:", options, default=default)
-    if st.button("Delete Selected"):
-        ids_to_delete = [int(item.split("ID:")[1].rstrip(")").strip()) for item in selected]
-        if ids_to_delete:
-            supabase.table("leads").delete().in_("id", ids_to_delete).execute()
-            st.success(f"Deleted {len(ids_to_delete)} lead(s). Refreshing...")
-            st.experimental_rerun()
+        # Remove specific items
+        if "Address" in df.columns:
+            options = df["Address"].dropna().unique().tolist()
+            to_remove = st.multiselect("Select addresses to remove", options)
+            if to_remove:
+                df = df[~df["Address"].isin(to_remove)]
+                st.write(f"Removed {len(to_remove)} items; {len(df)} remaining.")
+    with col2:
+        # Sort options
+        if st.checkbox("Sort by ARV estimate"):
+            arv_col = "ARV_Estimate" if "ARV_Estimate" in df.columns else ("arv" if "arv" in df.columns else None)
+            if arv_col:
+                df = df.sort_values(by=arv_col, ascending=False, ignore_index=True)
+                st.write("Sorted by ARV estimate.")
+            else:
+                st.warning("No ARV column found to sort by.")
 
-# ---------- Live Leads Dashboard ----------
-st.subheader("📈 Live Leads Dashboard")
-if not leads_df.empty:
-    display_df = leads_df.drop(columns=["id"]) if "id" in leads_df.columns else leads_df
-    st.dataframe(display_df, use_container_width=True)
+    # Display the organized DataFrame
+    st.dataframe(df)
 
-    hot_leads = leads_df[leads_df["status"] == "Hot"]
-    if not hot_leads.empty:
-        st.markdown("## 🔥 HOT LEADS ALERT")
-        st.table(hot_leads[["name", "phone", "address", "follow_up_date"]])
+    # Process button
+    if st.button("Process Leads"):
+        results = []
+        for _, row in df.iterrows():
+            address = row.get("Address") or row.get("address") or ""
+
+            # Geocode via Google Maps API
+            geocode_url = "https://maps.googleapis.com/maps/api/geocode/json"
+            params = {"address": address, "key": GOOGLE_MAPS_API_KEY}
+            resp = requests.get(geocode_url, params=params).json()
+            if resp.get("status") == "OK":
+                loc = resp["results"][0]["geometry"]["location"]
+                lat, lng = loc["lat"], loc["lng"]
+                map_link = f"https://www.google.com/maps/search/?api=1&query={lat},{lng}"
+                street_view = f"https://maps.googleapis.com/maps/api/streetview?location={lat},{lng}&size=600x400&key={GOOGLE_MAPS_API_KEY}"
+            else:
+                lat = lng = None
+                map_link = street_view = None
+
+            # ARV estimation stub
+            arv_input = row.get("ARV_Estimate") or row.get("arv") or ""
+            try:
+                arv = float(arv_input)
+            except:
+                arv = None
+
+            results.append({
+                "Address": address,
+                "Latitude": lat,
+                "Longitude": lng,
+                "Map Link": map_link,
+                "Street View URL": street_view,
+                "ARV Estimate": arv
+            })
+
+        res_df = pd.DataFrame(results)
+        st.dataframe(res_df)
+        csv_data = res_df.to_csv(index=False).encode("utf-8")
+        st.download_button(
+            "Download Processed Leads CSV",
+            data=csv_data,
+            file_name="processed_leads.csv",
+            mime="text/csv"
+        )
 else:
-    st.info("No leads found. Use the form above to add new leads.")
+    st.info("Awaiting CSV file upload. Drag and drop your CSV files to get started.")
