@@ -1,157 +1,127 @@
-#!/usr/bin/env python3
 import os
-import requests
 import re
+import requests
+from bs4 import BeautifulSoup
 from datetime import datetime
-from bs4 import BeautifulSoup   # ← fixed typo here
 from supabase import create_client, Client
+from twilio.rest import Client as TwilioClient
+from pyairtable import Table
+from dotenv import load_dotenv
 
-# ──────── DEBUG: Sanity‐check CI env & working dir ────────
-print("🔍 RUNNING scrapers.py from:", os.getcwd())
-for var in ("SUPABASE_URL","SUPABASE_KEY","RAPIDAPI_KEY","GOOGLE_MAPS_API_KEY"):
-    val = os.getenv(var, "") or ""
-    print(f"🔑 {var:21} length:", len(val))
+load_dotenv()
 
-# ──────── Credentials & Supabase Init ────────
-try:
-    import config
-    _local = True
-except ImportError:
-    _local = False
+# ─── ENVIRONMENT VARIABLES ─────────────────────────────────────────────
+SUPABASE_URL = os.getenv("SUPABASE_URL")
+SUPABASE_KEY = os.getenv("SUPABASE_KEY")
+TWILIO_SID = os.getenv("TWILIO_SID")
+TWILIO_TOKEN = os.getenv("TWILIO_TOKEN")
+TWILIO_FROM = os.getenv("TWILIO_FROM")
+ALERT_PHONE_TO = os.getenv("ALERT_PHONE_TO")
+EMAIL_HOST = os.getenv("EMAIL_HOST")
+EMAIL_PORT = int(os.getenv("EMAIL_PORT"))
+EMAIL_USER = os.getenv("EMAIL_USER")
+EMAIL_PASS = os.getenv("EMAIL_PASS")
+ALERT_EMAIL_TO = os.getenv("ALERT_EMAIL_TO")
+AIRTABLE_BASE_ID = os.getenv("AIRTABLE_BASE_ID")
+AIRTABLE_TABLE_NAME = os.getenv("AIRTABLE_TABLE_NAME")
+AIRTABLE_API_KEY = os.getenv("AIRTABLE_API_KEY")
 
-# Strip any accidental whitespace/newlines from secrets
-raw_url = os.getenv("SUPABASE_URL", config.SUPABASE_URL if _local else None)
-raw_key = os.getenv("SUPABASE_KEY", config.SUPABASE_KEY if _local else None)
-raw_rapid = os.getenv("RAPIDAPI_KEY", config.RAPIDAPI_KEY if _local else None)
-raw_maps = os.getenv("GOOGLE_MAPS_API_KEY", config.GOOGLE_MAPS_API_KEY if _local else None)
-
-SUPABASE_URL        = raw_url.strip() if isinstance(raw_url, str) else raw_url
-SUPABASE_KEY        = raw_key.strip() if isinstance(raw_key, str) else raw_key
-RAPIDAPI_KEY        = raw_rapid.strip() if isinstance(raw_rapid, str) else raw_rapid
-GOOGLE_MAPS_API_KEY = raw_maps.strip() if isinstance(raw_maps, str) else raw_maps
-
+# ─── SETUP ──────────────────────────────────────────────────────────────
 supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
+twilio_client = TwilioClient(TWILIO_SID, TWILIO_TOKEN)
+airtable = Table(AIRTABLE_API_KEY, AIRTABLE_BASE_ID, AIRTABLE_TABLE_NAME)
 
-HEADERS = {"User-Agent": "Mozilla/5.0"}
-HOT_WORDS = ["motivated", "cash", "as-is", "urgent", "must sell", "investor", "fast", "cheap"]
+HOT_WORDS = ["off market", "fsbo", "flip", "owner finance", "cash only", "needs work", "assignment"]
+MAX_HOT_PRICE = 300000
 
-def is_hot(text: str) -> bool:
-    return any(w in text.lower() for w in HOT_WORDS) if text else False
-
-def normalize_price(val) -> int|None:
-    if not val: return None
-    digits = re.sub(r'[^0-9]', '', str(val))
-    return int(digits) if digits else None
-
-def push_to_supabase(leads: list[dict]):
-    for lead in leads:
-        try:
-            supabase.table("leads").insert(lead).execute()
-            print("✅ Pushed:", lead.get("title"))
-        except Exception as e:
-            print("❌ Push failed:", e)
-
-def scrape_zillow() -> list[dict]:
-    print("📡 Scraping Zillow…")
-    url = "https://zillow-com1.p.rapidapi.com/propertyExtendedSearch"
-    headers = {
-        "X-RapidAPI-Key": RAPIDAPI_KEY,
-        "X-RapidAPI-Host": "zillow-com1.p.rapidapi.com"
-    }
+# ─── FUNCTIONS ───────────────────────────────────────────────────────────
+def scrape_craigslist():
+    url = "https://dallas.craigslist.org/search/rea?hasPic=1"
+    res = requests.get(url)
+    soup = BeautifulSoup(res.text, "html.parser")
+    posts = soup.select(".result-row")
     leads = []
-    try:
-        params = {"location": "Dallas, TX", "status_type": "ForSaleByOwner"}
-        print(f"🔗 Zillow → GET {url} params={params}")
-        resp = requests.get(url, headers=headers, params=params)
-        print("📥 Zillow status:", resp.status_code)
-        j = resp.json()
-        print("📦 Zillow JSON keys:", list(j.keys()))
-        data = j.get("props", [])
-        print("📊 Zillow 'props' count:", len(data))
-        for prop in data:
-            desc = f"{prop.get('bedrooms','')}bd {prop.get('bathrooms','')}ba {prop.get('livingArea','')} sqft"
-            leads.append({
-                "title": prop.get("addressStreet", "Zillow FSBO"),
-                "description": desc,
-                "price": normalize_price(prop.get("price")),
-                "city": prop.get("addressCity", "Dallas"),
-                "zip": prop.get("addressZipcode", ""),
-                "source": "Zillow FSBO",
-                "hot_lead": is_hot(desc),
-                "created_at": datetime.utcnow().isoformat()
-            })
-    except Exception as e:
-        print("⚠ Zillow error:", e)
+    for post in posts:
+        title = post.select_one(".result-title").text.strip()
+        link = post.select_one(".result-title")['href']
+        price_match = re.search(r'\$(\d+[\,\d]*)', post.text)
+        price = int(price_match.group(1).replace(',', '')) if price_match else None
+        leads.append({"title": title, "url": link, "price": price})
     return leads
 
-def scrape_craigslist() -> list[dict]:
-    print("📡 Scraping Craigslist…")
-    leads = []
+def scrape_redfin(city="Dallas TX"):
+    query = city.replace(" ", "%20")
+    url = f"https://www.redfin.com/stingray/do/location-autocomplete?location={query}&v=2"
+    res = requests.get(url)
+    if res.status_code != 200:
+        return []
     try:
-        url = "https://dallas.craigslist.org/search/rea?hasPic=1"
-        print(f"🔗 Craigslist → GET {url}")
-        resp = requests.get(url, headers=HEADERS)
-        print("📥 Craigslist status:", resp.status_code)
-        soup = BeautifulSoup(resp.text, "html.parser")
-        posts = soup.select("li.result-row")
-        print("📊 Craigslist result-row count:", len(posts))
-        for post in posts:
-            title = post.select_one("a.result-title").text.strip()
-            link = post.select_one("a.result-title")["href"]
-            price = post.select_one("span.result-price")
-            desc = f"Craigslist link: {link}"
-            leads.append({
-                "title": title,
-                "description": desc,
-                "price": normalize_price(price.text if price else None),
-                "city": "DFW",
-                "zip": "",
-                "source": "Craigslist",
-                "hot_lead": is_hot(title + " " + desc),
-                "created_at": datetime.utcnow().isoformat()
-            })
+        data = res.json()["payload"]["sections"][0]["rows"]
+        properties = []
+        for item in data:
+            name = item.get("name")
+            url = f"https://www.redfin.com{item.get('url')}"
+            arv = estimate_redfin_arv(url)
+            properties.append({"title": name, "url": url, "price": arv})
+        return properties
     except Exception as e:
-        print("⚠ Craigslist error:", e)
-    return leads
+        print(f"Redfin scrape error: {e}")
+        return []
 
-def scrape_facebook() -> list[dict]:
-    print("📡 Scraping Facebook Marketplace…")
-    url = "https://facebook-marketplace1.p.rapidapi.com/search"
-    headers = {
-        "x-rapidapi-host": "facebook-marketplace1.p.rapidapi.com",
-        "x-rapidapi-key":  RAPIDAPI_KEY
-    }
-    leads = []
+def estimate_redfin_arv(listing_url):
     try:
-        params = {"sort": "newest", "city": "Dallas", "daysSinceListed": "1"}
-        print(f"🔗 Facebook → GET {url} params={params}")
-        resp = requests.get(url, headers=headers, params=params)
-        print("📥 Facebook status:", resp.status_code)
-        j = resp.json()
-        print("📦 Facebook JSON keys:", list(j.keys()))
-        listings = j.get("listings", j.get("data", []))
-        print("📊 Facebook listings count:", len(listings))
-        for item in listings:
-            title = item.get("marketplace_listing_title", "FB Listing")
-            desc = f"FB: {item.get('permalink')}"
-            leads.append({
-                "title": title,
-                "description": desc,
-                "price": normalize_price(item.get("listing_price")),
-                "city": "Dallas",
-                "zip": "",
-                "source": "Facebook Marketplace",
-                "hot_lead": is_hot(title + " " + desc),
-                "created_at": datetime.utcnow().isoformat()
-            })
+        res = requests.get(listing_url, headers={"User-Agent": "Mozilla/5.0"})
+        soup = BeautifulSoup(res.text, "html.parser")
+        price_tag = soup.find("div", class_="statsValue")
+        if price_tag:
+            price = int(re.sub(r'[^\d]', '', price_tag.text))
+            return price
     except Exception as e:
-        print("⚠ Facebook error:", e)
-    return leads
+        print(f"ARV estimation error: {e}")
+    return None
 
-def main():
-    all_leads = scrape_zillow() + scrape_craigslist() + scrape_facebook()
-    print(f"📊 Total scraped: {len(all_leads)}")
-    push_to_supabase(all_leads)
+def push_to_supabase(lead):
+    existing = supabase.table("leads").select("title").eq("title", lead["title"]).execute()
+    if not existing.data:
+        supabase.table("leads").insert(lead).execute()
+        return True
+    return False
 
+def send_sms_alert(body):
+    twilio_client.messages.create(body=body[:120], from_=TWILIO_FROM, to=ALERT_PHONE_TO)
+
+def send_email_alert(body):
+    import smtplib
+    from email.mime.text import MIMEText
+    msg = MIMEText(body)
+    msg["Subject"] = "🚨 Hot Lead Alert!"
+    msg["From"] = EMAIL_USER
+    msg["To"] = ALERT_EMAIL_TO
+    with smtplib.SMTP(EMAIL_HOST, EMAIL_PORT) as server:
+        server.starttls()
+        server.login(EMAIL_USER, EMAIL_PASS)
+        server.send_message(msg)
+
+def push_to_airtable(lead):
+    try:
+        airtable.create(lead)
+    except Exception as e:
+        print(f"⚠️ Airtable push failed for {lead['title']}: {e}")
+
+# ─── MAIN ────────────────────────────────────────────────────────────────
 if __name__ == "__main__":
-    main()
+    all_sources = scrape_craigslist() + scrape_redfin("Dallas TX")
+    hot_alerts = []
+    pushed = 0
+    for lead in all_sources:
+        if push_to_supabase(lead):
+            push_to_airtable(lead)
+            pushed += 1
+            print(f"✅ Pushed: {lead['title']}")
+            if lead['price'] and lead['price'] <= MAX_HOT_PRICE or any(word in lead['title'].lower() for word in HOT_WORDS):
+                hot_alerts.append(f"{lead['title']} - ${lead['price'] or 'N/A'}")
+    if hot_alerts:
+        body = "\n".join(hot_alerts)
+        send_sms_alert(body)
+        send_email_alert(body)
+    print(f"🔁 Done: {pushed} new leads pushed. {len(hot_alerts)} hot leads notified.")
