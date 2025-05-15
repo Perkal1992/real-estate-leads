@@ -1,10 +1,19 @@
+import os
 import streamlit as st
 import pandas as pd
 import requests
 from datetime import datetime
 
-# Configure your Google Maps API key via Streamlit secrets
-GOOGLE_MAPS_API_KEY = st.secrets["GOOGLE_MAPS_API_KEY"]  # Ensure this is set in your Streamlit secrets
+# Configure your Google Maps API key via Streamlit secrets or environment variable
+try:
+    GOOGLE_MAPS_API_KEY = st.secrets["GOOGLE_MAPS_API_KEY"]
+except Exception:
+    GOOGLE_MAPS_API_KEY = os.getenv("GOOGLE_MAPS_API_KEY", "")
+
+if not GOOGLE_MAPS_API_KEY:
+    st.error(
+        "Google Maps API key not set. Please configure it via a .streamlit/secrets.toml file or set the environment variable 'GOOGLE_MAPS_API_KEY'."
+    )
 
 # Page setup
 st.set_page_config(
