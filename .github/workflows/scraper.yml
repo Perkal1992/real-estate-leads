@@ -26,4 +26,16 @@ jobs:
           SUPABASE_KEY:        ${{ secrets.SUPABASE_KEY }}
           GOOGLE_MAPS_API_KEY: ${{ secrets.GOOGLE_MAPS_API_KEY }}
           RAPIDAPI_KEY:        ${{ secrets.RAPIDAPI_KEY }}
-        run: python3 scrapers.py
+          TWILIO_SID:          ${{ secrets.TWILIO_SID }}
+          TWILIO_TOKEN:        ${{ secrets.TWILIO_TOKEN }}
+          TWILIO_FROM:         ${{ secrets.TWILIO_FROM }}
+          ALERT_PHONE_TO:      ${{ secrets.ALERT_PHONE_TO }}
+          EMAIL_HOST:          ${{ secrets.EMAIL_HOST }}
+          EMAIL_PORT:          ${{ secrets.EMAIL_PORT }}
+          EMAIL_USER:          ${{ secrets.EMAIL_USER }}
+          EMAIL_PASS:          ${{ secrets.EMAIL_PASS }}
+          ALERT_EMAIL_TO:      ${{ secrets.ALERT_EMAIL_TO }}
+          AIRTABLE_BASE_ID:    ${{ secrets.AIRTABLE_BASE_ID }}
+          AIRTABLE_API_KEY:    ${{ secrets.AIRTABLE_API_KEY }}
+          AIRTABLE_TABLE_NAME: ${{ secrets.AIRTABLE_TABLE_NAME }}
+        run: python Scraper.py
