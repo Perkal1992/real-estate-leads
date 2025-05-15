@@ -1,0 +1,9 @@
+{
+  "tasks": [
+    {
+      "name": "Run Scraper Every 30min",
+      "command": "python Scraper.py",
+      "schedule": "*/30 * * * *"
+    }
+  ]
+}
