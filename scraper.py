@@ -1,45 +1,56 @@
+# scraper.py
+
 import requests
 from bs4 import BeautifulSoup
-from datetime import datetime
+import streamlit as st
+from supabase import create_client, Client
 
-def get_craigslist_leads(city: str, timeout: int = 10):
-    """
-    Fetch the latest real-estate listings from Craigslist for the given city subdomain.
-    Returns a list of dicts with: date_posted (datetime), title, link, price (float).
-    """
-    url = f"https://{city}.craigslist.org/search/rea"
-    resp = requests.get(url, timeout=timeout)
+# —– initialize Supabase client from secrets.toml —–
+SUPABASE_URL = st.secrets["SUPABASE_URL"]
+SUPABASE_KEY = st.secrets["SUPABASE_KEY"]
+supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
+
+def get_craigslist_leads(region: str = "sfbay") -> list[dict]:
+    """Scrape the first page of Craigslist real-estate leads."""
+    url = f"https://{region}.craigslist.org/search/rea"
+    resp = requests.get(url, timeout=10)
     resp.raise_for_status()
     soup = BeautifulSoup(resp.text, "html.parser")
 
     leads = []
-    for result in soup.select(".result-info"):
-        title_el = result.select_one(".result-title")
-        date_el = result.select_one(".result-date")
-        price_el = result.select_one(".result-price")
-
-        # parse price to float
-        price = None
-        if price_el:
-            try:
-                price = float(price_el.text.replace("$", "").replace(",", ""))
-            except ValueError:
-                price = None
-
-        # parse date
-        date_posted = None
-        if date_el:
-            try:
-                date_posted = datetime.fromisoformat(date_el["datetime"])
-            except Exception:
-                date_posted = None
+    for row in soup.select(".result-row"):
+        title_el = row.select_one(".result-title")
+        time_el = row.select_one("time")
+        price_el = row.select_one(".result-price")
 
         leads.append({
-            "date_posted": date_posted,
-            "title": title_el.text if title_el else "",
-            "link": title_el["href"] if title_el and title_el.has_attr("href") else "",
-            "price": price,
-            "fetched_at": datetime.utcnow()
+            "date_posted": time_el["datetime"] if time_el else None,
+            "title": title_el.text if title_el else None,
+            "link": title_el["href"] if title_el else None,
+            "price": float(price_el.text.strip("$")) if price_el else None,
         })
-
     return leads
+
+def store_leads(leads: list[dict]) -> list[dict]:
+    """Insert scraped leads into Supabase and return the inserted rows."""
+    if not leads:
+        return []
+    res = (
+        supabase
+        .from_("craigslist_leads")
+        .insert(leads)
+        .select("*")    # ← must specify columns so PostgREST doesn’t send `columns=()`
+        .execute()
+    )
+    return res.data or []
+
+def get_all_leads() -> list[dict]:
+    """Fetch all leads sorted by newest first."""
+    res = (
+        supabase
+        .from_("craigslist_leads")
+        .select("*")
+        .order("date_posted", desc=True)
+        .execute()
+    )
+    return res.data or []
