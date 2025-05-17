@@ -18,7 +18,7 @@ SAS_BG_URL = (
 )
 
 st.set_page_config(
-    page_title="🏠 Savory Realty Investments",
+    page_title="Savory Realty Investments",
     page_icon=SAS_BG_URL,
     layout="wide",
 )
@@ -31,19 +31,15 @@ st.markdown(
         background: url("{SAS_BG_URL}") no-repeat center center fixed;
         background-size: cover;
       }}
-      /* dark overlay so text stays readable */
       .stApp::before {{
         content: "";
-        position: absolute;
-        top: 0; left: 0;
-        width: 100%; height: 100%;
+        position: absolute; top:0; left:0;
+        width:100%; height:100%;
         background: rgba(0,0,0,0.6);
         z-index: 0;
       }}
-      /* ensure your app content sits on top */
       .main > div {{
-        position: relative;
-        z-index: 1;
+        position: relative; z-index: 1;
       }}
     </style>
     """,
@@ -61,6 +57,27 @@ st.markdown(
     unsafe_allow_html=True,
 )
 
+# ─── Opacity tweaks ───────────────────────────────────────────────────────────
+st.markdown(
+    """
+    <style>
+      /* Restore sidebar opacity */
+      [data-testid="stSidebar"] {
+        background-color: rgba(0,0,0,0.7) !important;
+      }
+      /* Slightly translucent panels for tables and charts */
+      [data-testid="stDataFrame"],
+      [data-testid="stDataFrame"] > div,
+      [data-testid="stAltairChart"],
+      [data-testid="stAltairChart"] > div {
+        background-color: rgba(255, 255, 255, 0.8) !important;
+        backdrop-filter: blur(6px);
+      }
+    </style>
+    """,
+    unsafe_allow_html=True,
+)
+
 # ─── Data caching ─────────────────────────────────────────────────────────────
 @st.cache_data(ttl=300, show_spinner=False)
 def get_data(region: str) -> pd.DataFrame:
@@ -70,7 +87,8 @@ def get_data(region: str) -> pd.DataFrame:
 region = os.getenv("CRAIGS_REGION", "dallas")
 
 # ─── Sidebar navigation ───────────────────────────────────────────────────────
-st.sidebar.title("🏠 Savory Realty Investments")
+st.sidebar.image(SAS_BG_URL, width=48)
+st.sidebar.title("Savory Realty Investments")
 page = st.sidebar.radio("", ["Leads", "Dashboard", "Settings"])
 
 # ─── Leads page ───────────────────────────────────────────────────────────────
@@ -106,10 +124,8 @@ elif page == "Dashboard":
     c1, c2, c3 = st.columns(3)
     c1.metric("Total Leads", total)
     c2.metric("Average Price", f"${avg_price:,.0f}" if not pd.isna(avg_price) else "—")
-    c3.metric(
-        "Date Range",
-        f"{df.date_posted.min().date()} → {df.date_posted.max().date()}",
-    )
+    c3.metric("Date Range",
+              f"{df.date_posted.min().date()} → {df.date_posted.max().date()}")
 
     if st.checkbox("Show raw data preview"):
         st.write("DataFrame shape:", df.shape)
@@ -128,10 +144,8 @@ elif page == "Dashboard":
         start_date = end_date = date_min
         st.write(f"Showing data for {date_min}")
 
-    mask = df.date_posted.between(
-        pd.to_datetime(start_date), pd.to_datetime(end_date)
-    )
-    df_filtered = df.loc[mask]
+    df_filtered = df[df.date_posted.between(pd.to_datetime(start_date),
+                                            pd.to_datetime(end_date))]
 
     chart = (
         alt.Chart(df_filtered)
