@@ -1,51 +1,61 @@
-import os
+import streamlit as st
 import requests
 from bs4 import BeautifulSoup
-from supabase import create_client
-import pandas as pd
+from supabase import Client, create_client
 from datetime import datetime
+import pandas as pd
 
-# Supabase credentials from Streamlit secrets
-url = st.secrets["SUPABASE_URL"]
-key = st.secrets["SUPABASE_KEY"]
-supabase = create_client(url, key)
+# load your Supabase creds from Streamlit secrets
+SUPABASE_URL = st.secrets["SUPABASE_URL"]
+SUPABASE_KEY = st.secrets["SUPABASE_KEY"]
 
-REGION = "sfbay"  # ← change this to your Craigslist subdomain
+# initialize supabase client
+supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 
-@st.cache_data(ttl=300)
-def fetch_and_store():
-    # 1. Scrape
-    resp = requests.get(f"https://{REGION}.craigslist.org/search/rea", timeout=10)
+# change this to your Craigslist subdomain (e.g. "sfbay", "newyork", etc.)
+CRAIGSLIST_SUBDOMAIN = "sfbay"
+
+def get_craigslist_leads():
+    url = f"https://{CRAIGSLIST_SUBDOMAIN}.craigslist.org/search/rea"
+    resp = requests.get(url, timeout=10)
     resp.raise_for_status()
     soup = BeautifulSoup(resp.text, "html.parser")
-    items = soup.select(".result-row")
-    leads = []
-    for it in items:
-        title = it.select_one(".result-title").text
-        link = it.select_one(".result-title")["href"]
-        price_el = it.select_one(".result-price")
-        price = float(price_el.text.replace("$", "")) if price_el else None
-        date_posted = it.select_one("time")["datetime"]
-        leads.append(
-            {
-                "date_posted": date_posted,
-                "title": title,
-                "link": link,
-                "price": price,
-                "fetched_at": datetime.utcnow().isoformat(),
-            }
-        )
 
-    df = pd.DataFrame(leads)
-    if df.empty:
-        return df
+    rows = []
+    for post in soup.select(".result-row"):
+        title_el = post.select_one(".result-title")
+        price_el = post.select_one(".result-price")
+        date_el  = post.select_one("time")
 
-    # 2. Upsert into Supabase
-    supabase.table("craigslist_leads").insert(df.to_dict(orient="records")).execute()
+        item = {
+            "date_posted": datetime.fromisoformat(date_el["datetime"]),
+            "title": title_el.text,
+            "link":   title_el["href"],
+            "price":  float(price_el.text.replace("$", "")) if price_el else None,
+            "fetched_at": datetime.utcnow(),
+        }
+        rows.append(item)
+    return rows
 
-    # 3. Fetch full table back
-    result = supabase.table("craigslist_leads").select("*").execute()
-    records = result.data or []
-    return pd.DataFrame(records)
+def store_leads(rows: list[dict]):
+    if not rows:
+        return
 
-# Expose only fetch_and_store to app.py
+    # upsert into your `craigslist_leads` table
+    supabase.table("craigslist_leads") \
+        .upsert(rows, on_conflict="link") \
+        .execute()
+
+def fetch_and_store() -> pd.DataFrame:
+    """Fetch fresh leads, store in Supabase, then return a DataFrame."""
+    rows = get_craigslist_leads()
+    store_leads(rows)
+
+    # now pull everything back out
+    data = supabase.table("craigslist_leads") \
+        .select("*") \
+        .order("date_posted", desc=True) \
+        .execute() \
+        .data
+
+    return pd.DataFrame(data)
