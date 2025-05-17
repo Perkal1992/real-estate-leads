@@ -1,91 +1,83 @@
 import streamlit as st
 import pandas as pd
 import altair as alt
-from scraper import get_craigslist_leads, store_leads, get_all_leads
+import pydeck as pdk
+from scraper import fetch_and_store
 
-st.set_page_config(page_title="Real Estate Leads", page_icon="🏠", layout="wide")
+st.set_page_config(page_title="🏠 Real Estate Leads", layout="wide")
 
-st.markdown(
-    "<h1 style='text-align:center; font-weight:bold;'>🏠 Real Estate Leads & Dashboard</h1>",
-    unsafe_allow_html=True,
-)
+# --- Sidebar navigation ---
+st.sidebar.title("🏠 Real Estate Leads")
+page = st.sidebar.radio("", ["Leads", "Dashboard", "Settings"])
 
-menu = st.sidebar.radio("Navigate", ["Leads", "Dashboard", "Settings"])
-
-# ─── LEADS ─────────────────────────────────────────────────────────────────────
-if menu == "Leads":
+if page == "Leads":
     st.header("🔎 Latest Craigslist Listings")
-    region = st.sidebar.text_input("Craigslist subdomain", value="sfbay")
-
-    if st.sidebar.button("Refresh now"):
-        st.cache_data.clear()
-
-    @st.cache_data(ttl=300)
-    def fetch_and_store(r):
-        raw = get_craigslist_leads(r)
-        return store_leads(raw)
-
-    leads = fetch_and_store(region)
-
-    if leads:
-        df = pd.DataFrame(leads)
-        df["date_posted"] = pd.to_datetime(df["date_posted"])
-        df["fetched_at"] = pd.to_datetime(df["fetched_at"])
-        st.dataframe(df, use_container_width=True)
+    df = fetch_and_store()
+    if df.empty:
+        st.info("No leads found yet. Click Refresh below.")
     else:
-        st.info("No new leads found.")
+        st.dataframe(df)
 
-# ─── DASHBOARD ─────────────────────────────────────────────────────────────────
-elif menu == "Dashboard":
+    if st.button("🔄 Refresh now"):
+        st.cache_data.clear()
+        df = fetch_and_store()
+        st.experimental_rerun()
+
+elif page == "Dashboard":
     st.header("📊 Analytics Dashboard")
-    all_leads = get_all_leads()
-
-    if all_leads:
-        df = pd.DataFrame(all_leads)
+    df = fetch_and_store()
+    if df.empty:
+        st.info("No data to chart.")
+    else:
         df["date_posted"] = pd.to_datetime(df["date_posted"])
-        df["price"] = pd.to_numeric(df["price"], errors="coerce")
-
-        st.subheader("Leads Over Time")
-        line = (
+        # Price over time
+        chart = (
             alt.Chart(df)
             .mark_line(point=True)
             .encode(
-                x=alt.X("date_posted:T", title="Date Posted"),
-                y=alt.Y("count()", title="Number of Leads"),
-                tooltip=["date_posted:T", "count()"]
+                x="date_posted:T",
+                y="price:Q",
+                tooltip=["title", "price", "date_posted"],
             )
-            .properties(width="100%", height=300)
+            .properties(height=300, width="100%")
         )
-        st.altair_chart(line, use_container_width=True)
+        st.altair_chart(chart, use_container_width=True)
 
-        st.subheader("Price Distribution")
-        hist = (
-            alt.Chart(df)
-            .mark_bar()
-            .encode(
-                x=alt.X("price:Q", bin=alt.Bin(maxbins=40), title="Price ($)"),
-                y=alt.Y("count()", title="Count"),
-                tooltip=["count()", "price:Q"]
+        # Map
+        if "latitude" in df.columns and "longitude" in df.columns:
+            df_map = df.dropna(subset=["latitude", "longitude"])
+            st.pydeck_chart(
+                pdk.Deck(
+                    initial_view_state=pdk.ViewState(
+                        latitude=df_map["latitude"].mean(),
+                        longitude=df_map["longitude"].mean(),
+                        zoom=11,
+                    ),
+                    layers=[
+                        pdk.Layer(
+                            "ScatterplotLayer",
+                            data=df_map,
+                            get_position=["longitude", "latitude"],
+                            get_radius=100,
+                            pickable=True,
+                        )
+                    ],
+                )
             )
-            .properties(width="100%", height=300)
-        )
-        st.altair_chart(hist, use_container_width=True)
-    else:
-        st.info("No leads in the database yet.")
 
-# ─── SETTINGS ──────────────────────────────────────────────────────────────────
-else:
-    st.header("⚙️ Settings & Setup")
+elif page == "Settings":
+    st.header("⚙️ Settings")
+    st.write("– Make sure your Supabase table is named `craigslist_leads` with columns:")
     st.markdown(
         """
-        - **Supabase table**: `craigslist_leads`  
-        - **Columns**:  
-          `id` (uuid primary key),  
-          `date_posted` (timestamp),  
-          `title` (text),  
-          `link` (text UNIQUE),  
-          `price` (numeric),  
-          `fetched_at` (timestamp DEFAULT now())  
-        - **Cache TTL**: 5 minutes (use “Refresh now” to override)  
+        - `id` (uuid primary key)  
+        - `date_posted` (timestamptz)  
+        - `title` (text)  
+        - `link` (text unique)  
+        - `price` (numeric)  
+        - `fetched_at` (timestamptz default now())  
+        - plus any of: latitude, longitude, etc.
         """
     )
+    st.write("– Change your region/subdomain in `scraper.py` to your city"])
+

@@ -6,3 +6,4 @@ supabase
 email-validator
 python-dotenv
 altair
+pydeck
