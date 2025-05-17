@@ -1,13 +1,16 @@
-# app.py
 import os
 import streamlit as st
-import pandas as pd
 
-# 1) CONFIG: pull from Render’s Environment
-SUPABASE_URL         = os.getenv("SUPABASE_URL")
-SUPABASE_KEY         = os.getenv("SUPABASE_KEY")
-GOOGLE_MAPS_API_KEY  = os.getenv("GOOGLE_MAPS_API_KEY")
-RAPIDAPI_KEY         = os.getenv("RAPIDAPI_KEY")
+# Local dev: load .env if it exists
+if os.path.exists(".env"):
+    from dotenv import load_dotenv
+    load_dotenv(".env")
+
+# In either case, pull from environment first, then fallback to st.secrets
+SUPABASE_URL = os.getenv("SUPABASE_URL", st.secrets["SUPABASE_URL"])
+SUPABASE_KEY = os.getenv("SUPABASE_KEY", st.secrets["SUPABASE_KEY"])
+GOOGLE_MAPS_API_KEY = os.getenv("GOOGLE_MAPS_API_KEY", st.secrets["GOOGLE_MAPS_API_KEY"])
+RAPIDAPI_KEY = os.getenv("RAPIDAPI_KEY", st.secrets["RAPIDAPI_KEY"])
 
 if not (SUPABASE_URL and SUPABASE_KEY and GOOGLE_MAPS_API_KEY and RAPIDAPI_KEY):
     st.error("⚠️ Missing one or more environment variables. Please set SUPABASE_URL, SUPABASE_KEY, GOOGLE_MAPS_API_KEY and RAPIDAPI_KEY in your Render Dashboard.")
