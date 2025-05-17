@@ -1,29 +1,21 @@
-# app.py
-
 import streamlit as st
 import pandas as pd
 import altair as alt
 from scraper import get_craigslist_leads, store_leads, get_all_leads
 
-st.set_page_config(
-    page_title="Real Estate Leads",
-    page_icon="🏠",
-    layout="wide",
-)
+st.set_page_config(page_title="Real Estate Leads", page_icon="🏠", layout="wide")
 
-# --- HEADER ---
 st.markdown(
-    "<h1 style='text-align: center; font-weight: bold;'>🏠 Real Estate Leads & Dashboard</h1>",
+    "<h1 style='text-align:center; font-weight:bold;'>🏠 Real Estate Leads & Dashboard</h1>",
     unsafe_allow_html=True,
 )
 
-# --- NAV SIDEBAR ---
 menu = st.sidebar.radio("Navigate", ["Leads", "Dashboard", "Settings"])
 
-# --- LEADS PAGE ---
+# ─── LEADS ─────────────────────────────────────────────────────────────────────
 if menu == "Leads":
     st.header("🔎 Latest Craigslist Listings")
-    region = st.sidebar.text_input("Craigslist subdomain (e.g. sfbay, newyork, etc.)", "sfbay")
+    region = st.sidebar.text_input("Craigslist subdomain", value="sfbay")
 
     if st.sidebar.button("Refresh now"):
         st.cache_data.clear()
@@ -43,7 +35,7 @@ if menu == "Leads":
     else:
         st.info("No new leads found.")
 
-# --- DASHBOARD PAGE ---
+# ─── DASHBOARD ─────────────────────────────────────────────────────────────────
 elif menu == "Dashboard":
     st.header("📊 Analytics Dashboard")
     all_leads = get_all_leads()
@@ -81,15 +73,19 @@ elif menu == "Dashboard":
     else:
         st.info("No leads in the database yet.")
 
-# --- SETTINGS PAGE ---
+# ─── SETTINGS ──────────────────────────────────────────────────────────────────
 else:
     st.header("⚙️ Settings & Setup")
     st.markdown(
         """
         - **Supabase table**: `craigslist_leads`  
-        - **Required columns**:  
-          `id`, `date_posted` (timestamp), `title` (text), `link` (text UNIQUE),  
-          `price` (numeric), `fetched_at` (timestamp DEFAULT now())  
+        - **Columns**:  
+          `id` (uuid primary key),  
+          `date_posted` (timestamp),  
+          `title` (text),  
+          `link` (text UNIQUE),  
+          `price` (numeric),  
+          `fetched_at` (timestamp DEFAULT now())  
         - **Cache TTL**: 5 minutes (use “Refresh now” to override)  
         """
     )

@@ -1,17 +1,15 @@
-# scraper.py
-
 import requests
 from bs4 import BeautifulSoup
 import streamlit as st
 from supabase import create_client, Client
 
-# —– initialize Supabase client from secrets.toml —–
+# ── Supabase client from secrets.toml ──────────────────────────────────────────
 SUPABASE_URL = st.secrets["SUPABASE_URL"]
 SUPABASE_KEY = st.secrets["SUPABASE_KEY"]
 supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 
 def get_craigslist_leads(region: str = "sfbay") -> list[dict]:
-    """Scrape the first page of Craigslist real-estate leads."""
+    """Scrape first page of Craigslist real-estate listings."""
     url = f"https://{region}.craigslist.org/search/rea"
     resp = requests.get(url, timeout=10)
     resp.raise_for_status()
@@ -32,14 +30,14 @@ def get_craigslist_leads(region: str = "sfbay") -> list[dict]:
     return leads
 
 def store_leads(leads: list[dict]) -> list[dict]:
-    """Insert scraped leads into Supabase and return the inserted rows."""
+    """Insert scraped leads into Supabase and return inserted rows."""
     if not leads:
         return []
     res = (
         supabase
         .from_("craigslist_leads")
         .insert(leads)
-        .select("*")    # ← must specify columns so PostgREST doesn’t send `columns=()`
+        .select("*")    # ← ensures PostgREST doesn’t send columns=()
         .execute()
     )
     return res.data or []

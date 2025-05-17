@@ -1,66 +1,91 @@
-import os
-from dotenv import load_dotenv
 import streamlit as st
-from supabase import create_client, Client
-from scraper import get_craigslist_leads
+import pandas as pd
+import altair as alt
+from scraper import get_craigslist_leads, store_leads, get_all_leads
 
-# ─── CONFIG ───────────────────────────────────────────────────────────────────
-# Load local .env in dev; on Render these come from the environment directly
-load_dotenv()
+st.set_page_config(page_title="Real Estate Leads", page_icon="🏠", layout="wide")
 
-SUPABASE_URL = os.getenv("SUPABASE_URL")
-SUPABASE_KEY = os.getenv("SUPABASE_KEY")
+st.markdown(
+    "<h1 style='text-align:center; font-weight:bold;'>🏠 Real Estate Leads & Dashboard</h1>",
+    unsafe_allow_html=True,
+)
 
-# Safety check
-if not SUPABASE_URL or not SUPABASE_KEY:
-    st.error(
-        "Supabase credentials not found. "
-        "Please set SUPABASE_URL and SUPABASE_KEY "
-        "in your .env or Render dashboard."
-    )
-    st.stop()
+menu = st.sidebar.radio("Navigate", ["Leads", "Dashboard", "Settings"])
 
-# Initialize Supabase client
-supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
+# ─── LEADS ─────────────────────────────────────────────────────────────────────
+if menu == "Leads":
+    st.header("🔎 Latest Craigslist Listings")
+    region = st.sidebar.text_input("Craigslist subdomain", value="sfbay")
 
+    if st.sidebar.button("Refresh now"):
+        st.cache_data.clear()
 
-# ─── DATA LAYER ────────────────────────────────────────────────────────────────
-@st.cache_data(ttl=300)
-def fetch_listings():
-    """Fetches your real‐estate listings from Supabase."""
-    resp = supabase.table("listings").select("*").execute()
-    if resp.error:
-        st.error(f"Error fetching listings: {resp.error.message}")
-        return []
-    return resp.data
+    @st.cache_data(ttl=300)
+    def fetch_and_store(r):
+        raw = get_craigslist_leads(r)
+        return store_leads(raw)
 
+    leads = fetch_and_store(region)
 
-@st.cache_data(ttl=300)
-def fetch_craigslist_leads():
-    """Scrape craigslist leads via your scraper.py module."""
-    try:
-        return get_craigslist_leads()
-    except Exception as e:
-        st.error(f"Error scraping Craigslist: {e}")
-        return []
-
-
-# ─── UI ────────────────────────────────────────────────────────────────────────
-st.set_page_config(page_title="Real Estate Leads", layout="wide")
-st.title("🏠 Real Estate Leads Dashboard")
-
-st.header("📋 Your Supabase Listings")
-listings = fetch_listings()
-if listings:
-    st.dataframe(listings)
-else:
-    st.write("No listings found yet.")
-
-st.header("📣 Craigslist Leads")
-if st.button("Load Craigslist Leads"):
-    leads = fetch_craigslist_leads()
     if leads:
-        st.dataframe(leads)
+        df = pd.DataFrame(leads)
+        df["date_posted"] = pd.to_datetime(df["date_posted"])
+        df["fetched_at"] = pd.to_datetime(df["fetched_at"])
+        st.dataframe(df, use_container_width=True)
     else:
-        st.write("No leads returned.")
+        st.info("No new leads found.")
 
+# ─── DASHBOARD ─────────────────────────────────────────────────────────────────
+elif menu == "Dashboard":
+    st.header("📊 Analytics Dashboard")
+    all_leads = get_all_leads()
+
+    if all_leads:
+        df = pd.DataFrame(all_leads)
+        df["date_posted"] = pd.to_datetime(df["date_posted"])
+        df["price"] = pd.to_numeric(df["price"], errors="coerce")
+
+        st.subheader("Leads Over Time")
+        line = (
+            alt.Chart(df)
+            .mark_line(point=True)
+            .encode(
+                x=alt.X("date_posted:T", title="Date Posted"),
+                y=alt.Y("count()", title="Number of Leads"),
+                tooltip=["date_posted:T", "count()"]
+            )
+            .properties(width="100%", height=300)
+        )
+        st.altair_chart(line, use_container_width=True)
+
+        st.subheader("Price Distribution")
+        hist = (
+            alt.Chart(df)
+            .mark_bar()
+            .encode(
+                x=alt.X("price:Q", bin=alt.Bin(maxbins=40), title="Price ($)"),
+                y=alt.Y("count()", title="Count"),
+                tooltip=["count()", "price:Q"]
+            )
+            .properties(width="100%", height=300)
+        )
+        st.altair_chart(hist, use_container_width=True)
+    else:
+        st.info("No leads in the database yet.")
+
+# ─── SETTINGS ──────────────────────────────────────────────────────────────────
+else:
+    st.header("⚙️ Settings & Setup")
+    st.markdown(
+        """
+        - **Supabase table**: `craigslist_leads`  
+        - **Columns**:  
+          `id` (uuid primary key),  
+          `date_posted` (timestamp),  
+          `title` (text),  
+          `link` (text UNIQUE),  
+          `price` (numeric),  
+          `fetched_at` (timestamp DEFAULT now())  
+        - **Cache TTL**: 5 minutes (use “Refresh now” to override)  
+        """
+    )
