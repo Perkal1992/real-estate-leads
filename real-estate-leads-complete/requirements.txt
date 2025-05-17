@@ -3,4 +3,4 @@ pandas
 requests
 googlemaps
 supabase
-python-dotenv
+python-dotenv>=0.21.0

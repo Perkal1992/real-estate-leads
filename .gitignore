@@ -5,7 +5,6 @@
 *.swp
 
 # Old scraper script
-scraper.py
 .streamlit/
 h that version to production-automation branch
 .streamlit/

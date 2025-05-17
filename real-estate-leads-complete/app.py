@@ -1,85 +1,64 @@
+# app.py
+import os
 import streamlit as st
 import pandas as pd
-from supabase import create_client, Client
 
-# ─── PAGE & SECRETS ─────────────────────────────────────────────────────
-st.set_page_config(page_title="SRI Leads Viewer", layout="wide")
-SUPABASE_URL = st.secrets["SUPABASE_URL"]
-SUPABASE_KEY = st.secrets["SUPABASE_KEY"]
+# 1) CONFIG: pull from Render’s Environment
+SUPABASE_URL         = os.getenv("SUPABASE_URL")
+SUPABASE_KEY         = os.getenv("SUPABASE_KEY")
+GOOGLE_MAPS_API_KEY  = os.getenv("GOOGLE_MAPS_API_KEY")
+RAPIDAPI_KEY         = os.getenv("RAPIDAPI_KEY")
 
-# ─── SUPABASE CLIENT ────────────────────────────────────────────────────
-supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
-
-# ─── HEADER with your logo ──────────────────────────────────────────────
-col1, col2 = st.columns([1, 8])
-with col1:
-    st.image("assets/logo.png", width=60)
-with col2:
-    st.title("Savory Realty Investments")
-    st.markdown("> Live pipeline of scraped leads")
-
-# ─── DATA LOADING ────────────────────────────────────────────────────────
-@st.cache_data(ttl=300)
-def load_leads() -> pd.DataFrame:
-    resp = supabase.table("leads") \
-        .select("*") \
-        .order("created_at", desc=True) \
-        .execute()
-    return pd.DataFrame(resp.data or [])
-
-df = load_leads()
-if df.empty:
-    st.warning("No leads found. Make sure your scraper has run.")
+if not (SUPABASE_URL and SUPABASE_KEY and GOOGLE_MAPS_API_KEY and RAPIDAPI_KEY):
+    st.error("⚠️ Missing one or more environment variables. Please set SUPABASE_URL, SUPABASE_KEY, GOOGLE_MAPS_API_KEY and RAPIDAPI_KEY in your Render Dashboard.")
     st.stop()
 
-# ─── SIDEBAR FILTERS ─────────────────────────────────────────────────────
-st.sidebar.header("Filter & View Options")
+# 2) Initialize Supabase client for your live feed
+from supabase import create_client, Client
+supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 
-# 1) filter by source
-sources = ["All"] + sorted(df["source"].dropna().unique().tolist())
-choice = st.sidebar.selectbox("Source", sources)
+# 3) Import your Craigslist scraper and any enrichment utils
+#    (adjust these imports to match your project layout)
+from scraper import get_craigslist_leads
+from utils.enrichment import enrich_addresses  # example
 
-# 2) price slider
-min_p, max_p = st.sidebar.slider(
-    "Price range",
-    int(df["price"].min() or 0),
-    int(df["price"].max() or 0),
-    (int(df["price"].min() or 0), int(df["price"].max() or 0)),
-    step=1000
+# 4) Functions to fetch your data
+@st.cache_data(ttl=60)
+def load_realtime_leads() -> pd.DataFrame:
+    resp = supabase.table("leads").select("*").execute()
+    data = resp.data or []
+    return pd.DataFrame(data)
+
+@st.cache_data(ttl=3600)
+def load_craigslist() -> pd.DataFrame:
+    leads = get_craigslist_leads(api_key=RAPIDAPI_KEY)
+    return pd.DataFrame(leads)
+
+# 5) Streamlit layout
+st.set_page_config(
+    page_title="Real Estate Leads Dashboard",
+    layout="wide",
 )
 
-# 3) hot-lead toggle (if you have a `hot_lead` boolean column)
-hot_only = st.sidebar.checkbox("Only hot leads", False)
+st.title("🏠 Real Estate Leads")
 
-# ─── APPLY FILTERS ───────────────────────────────────────────────────────
-filtered = df.copy()
-if choice != "All":
-    filtered = filtered[filtered["source"] == choice]
+with st.sidebar:
+    st.header("Controls")
+    if st.button("Refresh All"):
+        st.cache_data.clear()  # force reload
 
-filtered = filtered[
-    filtered["price"].fillna(0).between(min_p, max_p)
-]
-
-if hot_only and "hot_lead" in filtered.columns:
-    filtered = filtered[filtered["hot_lead"] == True]
-
-# ─── MAKE LINKS CLICKABLE ────────────────────────────────────────────────
-if "url" in filtered.columns:
-    filtered["View"] = filtered["url"].apply(
-        lambda u: f'<a href="{u}" target="_blank">🔗</a>'
-    )
-    display_df = filtered.drop(columns=["url"])
-    st.write(f"### Showing {len(filtered)} of {len(df)} leads")
-    st.write(display_df.to_html(escape=False, index=False),
-             unsafe_allow_html=True)
+st.subheader("🔴 Live Redfin Feed")
+df_live = load_realtime_leads()
+if df_live.empty:
+    st.write("No live data available.")
 else:
-    st.write(f"### Showing {len(filtered)} of {len(df)} leads")
-    st.dataframe(filtered, use_container_width=True)
+    # optionally enrich
+    df_live = enrich_addresses(df_live, GOOGLE_MAPS_API_KEY)
+    st.dataframe(df_live)
 
-# ─── DOWNLOAD BUTTON ────────────────────────────────────────────────────
-st.download_button(
-    "📥 Download CSV",
-    filtered.to_csv(index=False),
-    file_name="leads.csv",
-    mime="text/csv"
-)
+st.subheader("📋 Craigslist Leads")
+df_cl = load_craigslist()
+if df_cl.empty:
+    st.write("No Craigslist leads found.")
+else:
+    st.dataframe(df_cl)
