@@ -1,3 +1,4 @@
+import os
 import streamlit as st
 import pandas as pd
 import altair as alt
@@ -12,30 +13,26 @@ page = st.sidebar.radio("", ["Leads", "Dashboard", "Settings"])
 
 if page == "Leads":
     st.header("🔎 Latest Craigslist Listings")
+    df = fetch_and_store(region=os.getenv("CRAIGS_REGION", "dallas"))
+    if not df:
+        st.info("No leads found yet. Click Refresh below.")
+    else:
+        st.dataframe(pd.DataFrame(df))
 
-    # On a refresh, clear the cache and re-fetch
     if st.button("🔄 Refresh now"):
         st.cache_data.clear()
-        st.success("Cache cleared — fetching new leads…")
-
-    df = fetch_and_store()
-
-    if df.empty:
-        st.info("No leads found yet.")
-    else:
-        st.dataframe(df)
+        st.experimental_rerun()
 
 elif page == "Dashboard":
     st.header("📊 Analytics Dashboard")
-    df = fetch_and_store()
-
-    if df.empty:
+    df = fetch_and_store(region=os.getenv("CRAIGS_REGION", "dallas"))
+    if not df:
         st.info("No data to chart.")
     else:
+        df = pd.DataFrame(df)
         df["date_posted"] = pd.to_datetime(df["date_posted"])
-
         # Price over time
-        chart = (
+        line = (
             alt.Chart(df)
             .mark_line(point=True)
             .encode(
@@ -45,16 +42,16 @@ elif page == "Dashboard":
             )
             .properties(height=300, width="100%")
         )
-        st.altair_chart(chart, use_container_width=True)
+        st.altair_chart(line, use_container_width=True)
 
-        # Geomap if coordinates are present
+        # Map
         if {"latitude", "longitude"}.issubset(df.columns):
             df_map = df.dropna(subset=["latitude", "longitude"])
             st.pydeck_chart(
                 pdk.Deck(
                     initial_view_state=pdk.ViewState(
-                        latitude=float(df_map["latitude"].mean()),
-                        longitude=float(df_map["longitude"].mean()),
+                        latitude=df_map["latitude"].mean(),
+                        longitude=df_map["longitude"].mean(),
                         zoom=11,
                     ),
                     layers=[
@@ -71,16 +68,17 @@ elif page == "Dashboard":
 
 elif page == "Settings":
     st.header("⚙️ Settings")
-    st.write("– Make sure your Supabase table is named `craigslist_leads` with columns:")
     st.markdown(
         """
+        **Supabase table:** `craigslist_leads`  
+        Columns:
         - `id` (uuid primary key)  
         - `date_posted` (timestamptz)  
-        - `title` (text)  
-        - `link` (text unique)  
+        - `title` (text unique)  
+        - `link` (text)  
         - `price` (numeric)  
         - `fetched_at` (timestamptz default now())  
-        - plus any of: latitude, longitude, etc.
+        - *optional:* latitude, longitude, city, hot_lead, etc.
         """
     )
-    st.write("– Change your region/subdomain in `scraper.py` to your city")
+    st.write("– To change your Craigslist region, set the `CRAIGS_REGION` env var (default `dallas`).")
