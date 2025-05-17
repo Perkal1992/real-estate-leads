@@ -9,3 +9,4 @@
 h that version to production-automation branch
 .streamlit/
 h that version to production-automation branch
+__pycache__/
