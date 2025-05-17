@@ -1,61 +1,91 @@
-import streamlit as st
+# scraper.py
+import os
 import requests
 from bs4 import BeautifulSoup
-from supabase import Client, create_client
-from datetime import datetime
 import pandas as pd
+from supabase import create_client, Client
+from datetime import datetime
 
-# load your Supabase creds from Streamlit secrets
-SUPABASE_URL = st.secrets["SUPABASE_URL"]
-SUPABASE_KEY = st.secrets["SUPABASE_KEY"]
+# ─── CONFIGURE YOUR REGION HERE ────────────────────────────────────────────────
+# e.g. "sfbay", "newyork", "denver", "dfw", etc.
+REGION = "sfbay"
+# ────────────────────────────────────────────────────────────────────────────────
 
-# initialize supabase client
+# load Supabase creds from the environment
+SUPABASE_URL = os.environ.get("SUPABASE_URL")
+SUPABASE_KEY = os.environ.get("SUPABASE_KEY")
+if not SUPABASE_URL or not SUPABASE_KEY:
+    raise RuntimeError("Please set SUPABASE_URL and SUPABASE_KEY in the environment")
+
 supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 
-# change this to your Craigslist subdomain (e.g. "sfbay", "newyork", etc.)
-CRAIGSLIST_SUBDOMAIN = "sfbay"
-
-def get_craigslist_leads():
-    url = f"https://{CRAIGSLIST_SUBDOMAIN}.craigslist.org/search/rea"
+def scrape_craigslist():
+    """
+    Fetch the latest real-estate ads from Craigslist for REGION,
+    parse out date_posted, title, price, link.
+    """
+    url = f"https://{REGION}.craigslist.org/search/rea?sort=date"
     resp = requests.get(url, timeout=10)
     resp.raise_for_status()
     soup = BeautifulSoup(resp.text, "html.parser")
 
-    rows = []
-    for post in soup.select(".result-row"):
-        title_el = post.select_one(".result-title")
-        price_el = post.select_one(".result-price")
-        date_el  = post.select_one("time")
+    out = []
+    for row in soup.select(".result-row"):
+        # date
+        dt = row.select_one("time")
+        date_posted = dt["datetime"] if dt else None
 
-        item = {
-            "date_posted": datetime.fromisoformat(date_el["datetime"]),
-            "title": title_el.text,
-            "link":   title_el["href"],
-            "price":  float(price_el.text.replace("$", "")) if price_el else None,
-            "fetched_at": datetime.utcnow(),
-        }
-        rows.append(item)
-    return rows
+        # title & link
+        link_el = row.select_one(".result-title")
+        title = link_el.get_text(strip=True) if link_el else None
+        link  = link_el["href"] if link_el else None
 
-def store_leads(rows: list[dict]):
-    if not rows:
+        # price
+        price_el = row.select_one(".result-price")
+        price = price_el.get_text(strip=True).replace("$","") if price_el else None
+
+        if link and title and date_posted:
+            out.append({
+                "date_posted": date_posted,
+                "title": title,
+                "link": link,
+                "price": float(price) if price and price.isdigit() else None,
+                "fetched_at": datetime.utcnow().isoformat()
+            })
+
+    return out
+
+def store_leads(records):
+    """
+    Upsert the scraped records into Supabase.
+    Assumes a table named `craigslist_leads` with a UNIQUE constraint on `link`.
+    """
+    if not records:
         return
 
-    # upsert into your `craigslist_leads` table
+    # Insert with on_conflict = "link" to dedupe
     supabase.table("craigslist_leads") \
-        .upsert(rows, on_conflict="link") \
-        .execute()
+            .insert(records, on_conflict="link") \
+            .execute()
 
-def fetch_and_store() -> pd.DataFrame:
-    """Fetch fresh leads, store in Supabase, then return a DataFrame."""
-    rows = get_craigslist_leads()
-    store_leads(rows)
+def fetch_and_store():
+    """
+    Scrape + store, then pull everything back into a pandas DataFrame.
+    """
+    # 1) scrape & push
+    leads = scrape_craigslist()
+    store_leads(leads)
 
-    # now pull everything back out
-    data = supabase.table("craigslist_leads") \
-        .select("*") \
-        .order("date_posted", desc=True) \
-        .execute() \
-        .data
+    # 2) fetch from Supabase
+    resp = supabase.table("craigslist_leads") \
+                   .select("*") \
+                   .order("date_posted", desc=True) \
+                   .execute()
+    data = resp.data or []
+    df = pd.DataFrame(data)
+    return df
 
-    return pd.DataFrame(data)
+if __name__ == "__main__":
+    # quick smoke test
+    df = fetch_and_store()
+    print(df.head())
