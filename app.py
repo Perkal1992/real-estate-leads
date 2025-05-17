@@ -11,28 +11,41 @@ st.set_page_config(page_title="🏠 Real Estate Leads", layout="wide")
 st.sidebar.title("🏠 Real Estate Leads")
 page = st.sidebar.radio("", ["Leads", "Dashboard", "Settings"])
 
+@st.cache_data(ttl=300, show_spinner=False)
+def get_data(region: str) -> pd.DataFrame:
+    raw = fetch_and_store(region=region)
+    return pd.DataFrame(raw)
+
+region = os.getenv("CRAIGS_REGION", "dallas")
+
 if page == "Leads":
     st.header("🔎 Latest Craigslist Listings")
-    raw = fetch_and_store(region=os.getenv("CRAIGS_REGION", "dallas"))
-    df = pd.DataFrame(raw)  # ← wrap the list in a DataFrame
+    df = get_data(region)
+
     if df.empty:
         st.info("No leads found yet. Click Refresh below.")
     else:
         st.dataframe(df)
 
     if st.button("🔄 Refresh now"):
-        st.cache_data.clear()
-        st.rerun()
+        # 1) clear the cache  
+        st.cache_data.clear()  
+        # 2) re-fetch  
+        df = get_data(region)  
+        # 3) re-draw  
+        if df.empty:
+            st.info("Still no leads.")
+        else:
+            st.dataframe(df)
 
 elif page == "Dashboard":
     st.header("📊 Analytics Dashboard")
-    raw = fetch_and_store(region=os.getenv("CRAIGS_REGION", "dallas"))
-    df = pd.DataFrame(raw)
+    df = get_data(region)
+
     if df.empty:
         st.info("No data to chart.")
     else:
         df["date_posted"] = pd.to_datetime(df["date_posted"])
-        # Price over time
         chart = (
             alt.Chart(df)
             .mark_line(point=True)
@@ -41,18 +54,17 @@ elif page == "Dashboard":
                 y="price:Q",
                 tooltip=["title", "price", "date_posted"],
             )
-            .properties(height=300, width="100%")
+            .properties(height=300)  # numeric only
         )
         st.altair_chart(chart, use_container_width=True)
 
-        # Map
         if {"latitude", "longitude"}.issubset(df.columns):
             df_map = df.dropna(subset=["latitude", "longitude"])
             st.pydeck_chart(
                 pdk.Deck(
                     initial_view_state=pdk.ViewState(
-                        latitude=df_map["latitude"].mean(),
-                        longitude=df_map["longitude"].mean(),
+                        latitude=float(df_map["latitude"].mean()),
+                        longitude=float(df_map["longitude"].mean()),
                         zoom=11,
                     ),
                     layers=[
