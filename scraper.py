@@ -1,84 +1,103 @@
-# scraper.py
-import os
 import requests
+import re
+from datetime import datetime
 from bs4 import BeautifulSoup
-import pandas as pd
-import streamlit as st
 from supabase import create_client, Client
 
-# ─── CONFIG ────────────────────────────────────────────────────────────────────
-
-# e.g. "sfbay", "newyork", "dfw", etc.
-REGION = "DFW"
-
-# pull these from your Streamlit secrets.toml
-SUPABASE_URL = st.secrets["SUPABASE_URL"]
-SUPABASE_KEY = st.secrets["SUPABASE_KEY"]
-
+# ─────────── CREDENTIALS ───────────
+SUPABASE_URL = "https://pwkbszsljlpxhlfcvder.supabase.co"
+SUPABASE_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9…"
 supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 
-TABLE = "craigslist_leads"
+HOT_WORDS = ["motivated", "cash", "as-is", "urgent", "must sell", "investor", "fast", "cheap"]
 
-# ─── FETCH ─────────────────────────────────────────────────────────────────────
+def is_hot(text: str) -> bool:
+    txt = (text or "").lower()
+    return any(word in txt for word in HOT_WORDS)
 
-def fetch_craigslist():
-    url = f"https://{REGION}.craigslist.org/search/rea"
-    resp = requests.get(url, timeout=10)
-    resp.raise_for_status()
-    soup = BeautifulSoup(resp.text, "html.parser")
+def normalize_price(val) -> int | None:
+    if not val:
+        return None
+    digits = re.sub(r"[^\d]", "", str(val))
+    return int(digits) if digits else None
 
-    items = []
-    for result in soup.select(".result-row")[:50]:
-        # date
-        date = result.select_one("time.result-date")["datetime"]
+def get_existing_titles() -> set[str]:
+    try:
+        res = supabase.table("leads").select("title").limit(5000).execute()
+        return {r["title"] for r in res.data}
+    except Exception:
+        return set()
 
-        # title + link
-        link_el = result.select_one("a.result-title")
-        title = link_el.text.strip()
-        link  = link_el["href"]
+def push_to_supabase(leads: list[dict]):
+    existing = get_existing_titles()
+    pushed = 0
+    for lead in leads:
+        if lead["title"] in existing:
+            continue
+        try:
+            supabase.table("leads").insert(lead).execute()
+            pushed += 1
+        except Exception as e:
+            print(f"❌ Failed to push {lead['title']}: {e}")
+    print(f"🔁 Done: pushed {pushed} new leads.")
 
-        # price, may be missing
-        price_el = result.select_one(".result-price")
-        price = float(price_el.text.strip().replace("$","")) if price_el else None
+# ─────────── SCRAPERS ───────────
 
-        items.append({
-            "date_posted": date,
-            "title":       title,
-            "link":        link,
-            "price":       price,
-            "fetched_at":  pd.Timestamp.utcnow().isoformat(),
-        })
+def scrape_zillow(pages=3):
+    print("🔍 Zillow: not currently supported, skipping.")
+    return []
 
-    return items
+def scrape_facebook():
+    print("🔍 Facebook: not currently supported, skipping.")
+    return []
 
-# ─── STORE / UPSET ─────────────────────────────────────────────────────────────
+def scrape_craigslist(region="dallas", pages=1):
+    print(f"🔍 Scraping Craigslist ({region})…")
+    base = f"https://{region}.craigslist.org/search/rea?hasPic=1"
+    leads = []
+    try:
+        r = requests.get(base, timeout=10)
+        r.raise_for_status()
+        soup = BeautifulSoup(r.text, "html.parser")
+        items = soup.select("li.result-row")  # fallback to standard selector
 
-def store_leads(records):
-    # upsert on the unique link
-    res = (
-        supabase
-        .table(TABLE)
-        .insert(records, upsert=True)
-        .execute()
-    )
-    if res.error:
-        raise Exception(f"Supabase error: {res.error.message}")
-    return res.data
+        print(f" → Found {len(items)} listings")
+        for it in items:
+            # date
+            dt = it.select_one("time.result-date")["datetime"]
 
-# ─── PUBLIC API ────────────────────────────────────────────────────────────────
+            # title & link
+            a = it.select_one("a.result-title")
+            title = a.text.strip()
+            link  = a["href"]
 
-@st.cache_data(ttl=300)
-def fetch_and_store():
-    raw = fetch_craigslist()
-    if not raw:
-        # nothing new to fetch
-        data = supabase.table(TABLE).select("*").execute().data
-    else:
-        store_leads(raw)
-        data = supabase.table(TABLE).select("*").execute().data
+            # price
+            pe = it.select_one(".result-price")
+            price = normalize_price(pe.text if pe else None)
 
-    # convert to DataFrame
-    df = pd.DataFrame(data)
-    if "date_posted" in df:
-        df["date_posted"] = pd.to_datetime(df["date_posted"])
-    return df
+            leads.append({
+                "title":       title,
+                "description": f"Craigslist listing for {title}",
+                "link":        link,
+                "price":       price,
+                "city":        region,
+                "source":      "Craigslist",
+                "hot_lead":    is_hot(title),
+                "created_at":  dt,
+            })
+    except Exception as e:
+        print(f"❌ Craigslist error: {e}")
+    return leads
+
+# ─────────── MAIN ───────────
+
+def main():
+    z = scrape_zillow()
+    f = scrape_facebook()
+    c = scrape_craigslist("dallas")
+    all_leads = z + f + c
+    print(f"\n📦 Total scraped: {len(all_leads)} leads")
+    push_to_supabase(all_leads)
+
+if __name__ == "__main__":
+    main()
