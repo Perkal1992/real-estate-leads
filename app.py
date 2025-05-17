@@ -79,5 +79,4 @@ elif page == "Settings":
         - plus any of: latitude, longitude, etc.
         """
     )
-    st.write("– Change your region/subdomain in `scraper.py` to your city"])
-
+    st.write("– Change your region/subdomain in `scraper.py` to your city")
