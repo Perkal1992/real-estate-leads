@@ -1,43 +1,31 @@
 import os
-import re
 import requests
 from bs4 import BeautifulSoup
-from supabase import create_client, Client
-from dotenv import load_dotenv
+from supabase import create_client
 
-load_dotenv()
+# Grab your credentials from Streamlit Secrets
+SUPABASE_URL = os.environ.get("SUPABASE_URL") or ""
+SUPABASE_KEY = os.environ.get("SUPABASE_KEY") or ""
+supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
 
-SUPABASE_URL = os.getenv("SUPABASE_URL")
-SUPABASE_KEY = os.getenv("SUPABASE_KEY")
+def get_craigslist_leads():
+    """
+    Scrape the real-estate section of Craigslist for the latest postings.
+    Returns a list of dicts: [{"title":..., "link":..., "price":...}, …]
+    """
+    # ← adjust to your city’s Craigslist real-estate URL
+    url = "https://your-city.craigslist.org/search/rea"
+    resp = requests.get(url, timeout=10)
+    resp.raise_for_status()
+    soup = BeautifulSoup(resp.text, "html.parser")
 
-supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
-
-def scrape_craigslist():
-    url = "https://dallas.craigslist.org/search/rea?hasPic=1"
-    res = requests.get(url)
-    soup = BeautifulSoup(res.text, "html.parser")
-    posts = soup.select(".result-row")
     leads = []
-    for post in posts:
-        title = post.select_one(".result-title").text.strip()
-        link = post.select_one(".result-title")['href']
-        price_match = re.search(r'\$(\d+[\,\d]*)', post.text)
-        price = int(price_match.group(1).replace(',', '')) if price_match else None
-        leads.append({"title": title, "url": link, "price": price})
+    for row in soup.select(".result-row"):
+        title_el = row.select_one(".result-title")
+        price_el = row.select_one(".result-price")
+        leads.append({
+            "title": title_el.text.strip(),
+            "link":  title_el["href"],
+            "price": price_el.text.strip() if price_el else "",
+        })
     return leads
-
-def push_to_supabase(lead):
-    existing = supabase.table("leads").select("title").eq("title", lead["title"]).execute()
-    if not existing.data:
-        supabase.table("leads").insert(lead).execute()
-        return True
-    return False
-
-if __name__ == "__main__":
-    all_leads = scrape_craigslist()
-    pushed = 0
-    for lead in all_leads:
-        if push_to_supabase(lead):
-            pushed += 1
-            print(f"✅ Pushed: {lead['title']}")
-    print(f"🔁 Done: {pushed} new leads pushed.")
