@@ -12,24 +12,28 @@ page = st.sidebar.radio("", ["Leads", "Dashboard", "Settings"])
 
 if page == "Leads":
     st.header("🔎 Latest Craigslist Listings")
-    df = fetch_and_store()
-    if df.empty:
-        st.info("No leads found yet. Click Refresh below.")
-    else:
-        st.dataframe(df)
 
+    # On a refresh, clear the cache and re-fetch
     if st.button("🔄 Refresh now"):
         st.cache_data.clear()
-        df = fetch_and_store()
-        st.experimental_rerun()
+        st.success("Cache cleared — fetching new leads…")
+
+    df = fetch_and_store()
+
+    if df.empty:
+        st.info("No leads found yet.")
+    else:
+        st.dataframe(df)
 
 elif page == "Dashboard":
     st.header("📊 Analytics Dashboard")
     df = fetch_and_store()
+
     if df.empty:
         st.info("No data to chart.")
     else:
         df["date_posted"] = pd.to_datetime(df["date_posted"])
+
         # Price over time
         chart = (
             alt.Chart(df)
@@ -43,14 +47,14 @@ elif page == "Dashboard":
         )
         st.altair_chart(chart, use_container_width=True)
 
-        # Map
-        if "latitude" in df.columns and "longitude" in df.columns:
+        # Geomap if coordinates are present
+        if {"latitude", "longitude"}.issubset(df.columns):
             df_map = df.dropna(subset=["latitude", "longitude"])
             st.pydeck_chart(
                 pdk.Deck(
                     initial_view_state=pdk.ViewState(
-                        latitude=df_map["latitude"].mean(),
-                        longitude=df_map["longitude"].mean(),
+                        latitude=float(df_map["latitude"].mean()),
+                        longitude=float(df_map["longitude"].mean()),
                         zoom=11,
                     ),
                     layers=[
@@ -79,5 +83,4 @@ elif page == "Settings":
         - plus any of: latitude, longitude, etc.
         """
     )
-    st.write("– Change your region/subdomain in `scraper.py` to your city"])
-
+    st.write("– Change your region/subdomain in `scraper.py` to your city")
