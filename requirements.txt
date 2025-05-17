@@ -5,3 +5,5 @@ schedule
 beautifulsoup4
 supabase
 email-validator
+python-dotenv>=0.21.0
+python-dotenv
