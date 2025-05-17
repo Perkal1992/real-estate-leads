@@ -1,31 +1,45 @@
-import os
 import requests
 from bs4 import BeautifulSoup
-from supabase import create_client
+from datetime import datetime
 
-# Grab your credentials from Streamlit Secrets
-SUPABASE_URL = os.environ.get("SUPABASE_URL") or ""
-SUPABASE_KEY = os.environ.get("SUPABASE_KEY") or ""
-supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
-
-def get_craigslist_leads():
+def get_craigslist_leads(city: str, timeout: int = 10):
     """
-    Scrape the real-estate section of Craigslist for the latest postings.
-    Returns a list of dicts: [{"title":..., "link":..., "price":...}, …]
+    Fetch the latest real-estate listings from Craigslist for the given city subdomain.
+    Returns a list of dicts with: date_posted (datetime), title, link, price (float).
     """
-    # ← adjust to your city’s Craigslist real-estate URL
-    url = "https://your-city.craigslist.org/search/rea"
-    resp = requests.get(url, timeout=10)
+    url = f"https://{city}.craigslist.org/search/rea"
+    resp = requests.get(url, timeout=timeout)
     resp.raise_for_status()
     soup = BeautifulSoup(resp.text, "html.parser")
 
     leads = []
-    for row in soup.select(".result-row"):
-        title_el = row.select_one(".result-title")
-        price_el = row.select_one(".result-price")
+    for result in soup.select(".result-info"):
+        title_el = result.select_one(".result-title")
+        date_el = result.select_one(".result-date")
+        price_el = result.select_one(".result-price")
+
+        # parse price to float
+        price = None
+        if price_el:
+            try:
+                price = float(price_el.text.replace("$", "").replace(",", ""))
+            except ValueError:
+                price = None
+
+        # parse date
+        date_posted = None
+        if date_el:
+            try:
+                date_posted = datetime.fromisoformat(date_el["datetime"])
+            except Exception:
+                date_posted = None
+
         leads.append({
-            "title": title_el.text.strip(),
-            "link":  title_el["href"],
-            "price": price_el.text.strip() if price_el else "",
+            "date_posted": date_posted,
+            "title": title_el.text if title_el else "",
+            "link": title_el["href"] if title_el and title_el.has_attr("href") else "",
+            "price": price,
+            "fetched_at": datetime.utcnow()
         })
+
     return leads
