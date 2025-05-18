@@ -6,12 +6,13 @@ import altair as alt
 import pydeck as pdk
 from scraper import fetch_and_store
 
-# ─── Helper to load a local image as Base64 ───────────────────────────────────
+# ─── Helper to load a local image as Base64 ─────────────────────────────────────
+
 def _get_base64(image_path: str) -> str:
     with open(image_path, "rb") as img_file:
         return base64.b64encode(img_file.read()).decode()
 
-# ─── Page config & styling ────────────────────────────────────────────────────
+# ─── Page config & styling ───────────────────────────────────────
 background_base64 = _get_base64("logo.png")
 st.set_page_config(
     page_title="Savory Realty Investments",
@@ -19,42 +20,18 @@ st.set_page_config(
     layout="wide",
 )
 
-# ─── Pin sidebar arrow & restore scrolling ────────────────────────────────────
-st.markdown(
-    """
-    <style>
-      /* pin the collapse/expand arrow to top-left */
-      [data-testid="collapsedControl"],
-      button[aria-label="Expand sidebar"],
-      button[aria-label="Collapse sidebar"] {
-        position: fixed !important;
-        top: 16px !important;
-        left: 16px !important;
-        z-index: 1000 !important;
-        transform: none !important;
-      }
-      /* restore main pane scrolling */
-      [data-testid="stAppViewContainer"] {
-        overflow: auto !important;
-      }
-    </style>
-    """,
-    unsafe_allow_html=True,
-)
-
-# ─── Full-page background + dark overlay + scrolling fix ─────────────────────
+# ─── CSS Styles (Responsive Sidebar Toggle, Background, Mobile Fixes) ───
 st.markdown(
     f"""
     <style>
-      /* background from embedded Base64 */
       [data-testid="stAppViewContainer"] {{
         background-image: url("data:image/png;base64,{background_base64}");
         background-repeat: no-repeat;
         background-position: center center;
         background-attachment: fixed;
         background-size: cover;
+        overflow: auto !important;
       }}
-      /* dark overlay */
       [data-testid="stAppViewContainer"]::before {{
         content: "";
         position: absolute; top:0; left:0;
@@ -66,12 +43,33 @@ st.markdown(
       [data-testid="stAppViewContainer"] > * {{
         position: relative; z-index: 1;
       }}
+
+      header [data-testid="collapsedControl"],
+      header button[aria-label="Expand sidebar"],
+      header button[aria-label="Collapse sidebar"] {{
+        position: absolute !important;
+        top: 10px !important;
+        left: 10px !important;
+        z-index: 1000 !important;
+        transform: none !important;
+      }}
+
+      @media screen and (max-width: 768px) {{
+        .stDataFrame, .stDataFrame > div {{
+          overflow-x: auto !important;
+          font-size: 14px !important;
+        }}
+        .stButton > button {{
+          width: 100% !important;
+          font-size: 16px !important;
+        }}
+      }}
     </style>
     """,
     unsafe_allow_html=True,
 )
 
-# ─── Dark theme tweaks (buttons/sidebar) ─────────────────────────────────────
+# ─── Dark theme tweaks (buttons/sidebar) ─────────────────────────
 st.markdown(
     """
     <style>
@@ -82,11 +80,10 @@ st.markdown(
     unsafe_allow_html=True,
 )
 
-# ─── Opacity tweaks for panels ───────────────────────────────────────────────
+# ─── Opacity tweaks for panels ──────────────────────────
 st.markdown(
     """
     <style>
-      /* Semi-opaque tables & charts */
       [data-testid="stDataFrame"],
       [data-testid="stDataFrame"] > div,
       [data-testid="stAltairChart"],
@@ -99,7 +96,7 @@ st.markdown(
     unsafe_allow_html=True,
 )
 
-# ─── Data caching ─────────────────────────────────────────────────────────────
+# ─── Data caching ────────────────────────────────────
 @st.cache_data(ttl=300, show_spinner=False)
 def get_data(region: str) -> pd.DataFrame:
     raw = fetch_and_store(region=region)
@@ -107,12 +104,12 @@ def get_data(region: str) -> pd.DataFrame:
 
 region = os.getenv("CRAIGS_REGION", "dallas")
 
-# ─── Sidebar navigation ───────────────────────────────────────────────────────
+# ─── Sidebar navigation ───────────────────────────────
 st.sidebar.image("logo.png", width=48)
 st.sidebar.title("Savory Realty Investments")
 page = st.sidebar.radio("", ["Leads", "Dashboard", "Settings"])
 
-# ─── Leads page ───────────────────────────────────────────────────────────────
+# ─── Leads page ──────────────────────────────────
 if page == "Leads":
     st.header("Latest Craigslist Listings")
     df = get_data(region)
@@ -129,7 +126,7 @@ if page == "Leads":
             st.success(f"Fetched {len(df)} leads.")
             st.dataframe(df)
 
-# ─── Dashboard page ──────────────────────────────────────────────────────────
+# ─── Dashboard page ─────────────────────────────
 elif page == "Dashboard":
     st.header("Analytics Dashboard")
     df = get_data(region)
@@ -196,7 +193,7 @@ elif page == "Dashboard":
         )
         st.pydeck_chart(pdk.Deck(initial_view_state=view, layers=[layer]))
 
-# ─── Settings page ───────────────────────────────────────────────────────────
+# ─── Settings page ──────────────────────────────
 elif page == "Settings":
     st.header("Settings")
     st.write("Make sure your Supabase table is named `craigslist_leads` with columns:")
