@@ -1,44 +1,69 @@
 import os
+import base64
 import streamlit as st
 import pandas as pd
 import altair as alt
 import pydeck as pdk
 from scraper import fetch_and_store
 
-# ─── Page config & styling ────────────────────────────────────────────────────
-SAS_BG_URL = (
-    "https://sdmntprwestus3.oaiusercontent.com/files/"
-    "00000000-1c14-61fd-8c9b-5286adab6799/raw?"
-    "se=2025-05-17T15%3A11%3A06Z&sp=r&sv=2024-08-04&sr=b&"
-    "scid=00000000-0000-0000-0000-000000000000&"
-    "skoid=71e8fa5c-90a9-4c17-827b-14c3005164d6&"
-    "sktid=a48cca56-e6da-484e-a814-9c849652bcb3&"
-    "skt=2025-05-17T13%3A38%3A19Z&ske=2025-05-18T13%3A38%3A19Z&"
-    "sks=b&skv=2024-08-04&sig=Fp4tNIXrj0xHYmf6ARoenQtZ6uVwdeIl7ZSlzTzzba4%3D"
-)
+# ─── Helper to load a local image as Base64 ───────────────────────────────────
+def _get_base64(image_path: str) -> str:
+    with open(image_path, "rb") as img_file:
+        return base64.b64encode(img_file.read()).decode()
 
+# ─── Page config & styling ────────────────────────────────────────────────────
+background_base64 = _get_base64("logo.png")
 st.set_page_config(
     page_title="Savory Realty Investments",
-    page_icon=SAS_BG_URL,
+    page_icon="logo.png",
     layout="wide",
 )
 
-# ─── Full-page background via CSS ────────────────────────────────────────────
+# ─── Pin sidebar arrow & restore scrolling ────────────────────────────────────
+st.markdown(
+    """
+    <style>
+      /* pin the collapse/expand arrow to top-left */
+      [data-testid="collapsedControl"],
+      button[aria-label="Expand sidebar"],
+      button[aria-label="Collapse sidebar"] {
+        position: fixed !important;
+        top: 16px !important;
+        left: 16px !important;
+        z-index: 1000 !important;
+        transform: none !important;
+      }
+      /* restore main pane scrolling */
+      [data-testid="stAppViewContainer"] {
+        overflow: auto !important;
+      }
+    </style>
+    """,
+    unsafe_allow_html=True,
+)
+
+# ─── Full-page background + dark overlay + scrolling fix ─────────────────────
 st.markdown(
     f"""
     <style>
-      .stApp {{
-        background: url("{SAS_BG_URL}") no-repeat center center fixed;
+      /* background from embedded Base64 */
+      [data-testid="stAppViewContainer"] {{
+        background-image: url("data:image/png;base64,{background_base64}");
+        background-repeat: no-repeat;
+        background-position: center center;
+        background-attachment: fixed;
         background-size: cover;
       }}
-      .stApp::before {{
+      /* dark overlay */
+      [data-testid="stAppViewContainer"]::before {{
         content: "";
         position: absolute; top:0; left:0;
         width:100%; height:100%;
         background: rgba(0,0,0,0.6);
         z-index: 0;
+        pointer-events: none;
       }}
-      .main > div {{
+      [data-testid="stAppViewContainer"] > * {{
         position: relative; z-index: 1;
       }}
     </style>
@@ -50,27 +75,23 @@ st.markdown(
 st.markdown(
     """
     <style>
-      [data-testid="stSidebar"] { background-color:rgba(0,0,0,0.7); }
-      .stButton>button { background-color:#0a84ff; color:#fff; }
+      [data-testid="stSidebar"] { background-color: rgba(0,0,0,0.7); }
+      .stButton>button { background-color: #0a84ff; color: #fff; }
     </style>
     """,
     unsafe_allow_html=True,
 )
 
-# ─── Opacity tweaks ───────────────────────────────────────────────────────────
+# ─── Opacity tweaks for panels ───────────────────────────────────────────────
 st.markdown(
     """
     <style>
-      /* Restore sidebar opacity */
-      [data-testid="stSidebar"] {
-        background-color: rgba(0,0,0,0.7) !important;
-      }
-      /* Slightly translucent panels for tables and charts */
+      /* Semi-opaque tables & charts */
       [data-testid="stDataFrame"],
       [data-testid="stDataFrame"] > div,
       [data-testid="stAltairChart"],
       [data-testid="stAltairChart"] > div {
-        background-color: rgba(255, 255, 255, 0.8) !important;
+        background-color: rgba(255,255,255,0.8) !important;
         backdrop-filter: blur(6px);
       }
     </style>
@@ -87,19 +108,19 @@ def get_data(region: str) -> pd.DataFrame:
 region = os.getenv("CRAIGS_REGION", "dallas")
 
 # ─── Sidebar navigation ───────────────────────────────────────────────────────
-st.sidebar.image(SAS_BG_URL, width=48)
+st.sidebar.image("logo.png", width=48)
 st.sidebar.title("Savory Realty Investments")
 page = st.sidebar.radio("", ["Leads", "Dashboard", "Settings"])
 
 # ─── Leads page ───────────────────────────────────────────────────────────────
 if page == "Leads":
-    st.header("🔎 Latest Craigslist Listings")
+    st.header("Latest Craigslist Listings")
     df = get_data(region)
     if df.empty:
         st.info("No leads found yet. Click **Refresh** below.")
     else:
         st.dataframe(df)
-    if st.button("🔄 Refresh now"):
+    if st.button("Refresh now"):
         get_data.clear()
         df = get_data(region)
         if df.empty:
@@ -110,7 +131,7 @@ if page == "Leads":
 
 # ─── Dashboard page ──────────────────────────────────────────────────────────
 elif page == "Dashboard":
-    st.header("📊 Analytics Dashboard")
+    st.header("Analytics Dashboard")
     df = get_data(region)
     if df.empty:
         st.info("No data to chart.")
@@ -124,28 +145,27 @@ elif page == "Dashboard":
     c1, c2, c3 = st.columns(3)
     c1.metric("Total Leads", total)
     c2.metric("Average Price", f"${avg_price:,.0f}" if not pd.isna(avg_price) else "—")
-    c3.metric("Date Range",
-              f"{df.date_posted.min().date()} → {df.date_posted.max().date()}")
+    c3.metric(
+        "Date Range",
+        f"{df.date_posted.min().date()} → {df.date_posted.max().date()}",
+    )
 
     if st.checkbox("Show raw data preview"):
         st.write("DataFrame shape:", df.shape)
         st.dataframe(df.head(10))
 
-    date_min = df.date_posted.min().date()
-    date_max = df.date_posted.max().date()
+    date_min, date_max = df.date_posted.min().date(), df.date_posted.max().date()
     if date_min < date_max:
         start_date, end_date = st.slider(
-            "Filter by date posted",
-            min_value=date_min,
-            max_value=date_max,
-            value=(date_min, date_max),
+            "Filter by date posted", date_min, date_max, (date_min, date_max)
         )
     else:
         start_date = end_date = date_min
         st.write(f"Showing data for {date_min}")
 
-    df_filtered = df[df.date_posted.between(pd.to_datetime(start_date),
-                                            pd.to_datetime(end_date))]
+    df_filtered = df[df.date_posted.between(
+        pd.to_datetime(start_date), pd.to_datetime(end_date)
+    )]
 
     chart = (
         alt.Chart(df_filtered)
@@ -161,7 +181,7 @@ elif page == "Dashboard":
 
     if {"latitude", "longitude"}.issubset(df_filtered.columns):
         df_map = df_filtered.dropna(subset=["latitude", "longitude"])
-        st.subheader("📍 Lead Locations")
+        st.subheader("Lead Locations")
         view = pdk.ViewState(
             latitude=df_map["latitude"].mean(),
             longitude=df_map["longitude"].mean(),
@@ -178,7 +198,7 @@ elif page == "Dashboard":
 
 # ─── Settings page ───────────────────────────────────────────────────────────
 elif page == "Settings":
-    st.header("⚙️ Settings")
+    st.header("Settings")
     st.write("Make sure your Supabase table is named `craigslist_leads` with columns:")
     st.markdown(
         """
@@ -191,4 +211,6 @@ elif page == "Settings":
         - plus any of: latitude, longitude, etc.
         """
     )
-    st.write("To change your region/subdomain, edit the `region = os.getenv(...)` line or update `scraper.py`.")
+    st.write(
+        "To change your region/subdomain, edit the `region = os.getenv(...)` line or update `scraper.py`."
+    )
