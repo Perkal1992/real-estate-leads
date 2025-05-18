@@ -7,7 +7,6 @@ import pydeck as pdk
 from scraper import fetch_and_store
 
 # ─── Helper to load a local image as Base64 ─────────────────────────────────────
-
 def _get_base64(image_path: str) -> str:
     with open(image_path, "rb") as img_file:
         return base64.b64encode(img_file.read()).decode()
@@ -112,18 +111,34 @@ page = st.sidebar.radio("", ["Leads", "Dashboard", "Settings"])
 # ─── Leads page ──────────────────────────────────
 if page == "Leads":
     st.header("Latest Craigslist Listings")
+
+    # CSV Upload
+    st.markdown("""---\n#### 📂 Upload Your Own Lead File (CSV)
+Drop a file below to preview:
+""")
+    uploaded_file = st.file_uploader("Upload CSV", type=["csv"])
+    if uploaded_file is not None:
+        try:
+            uploaded_df = pd.read_csv(uploaded_file)
+            st.success(f"✅ Uploaded {len(uploaded_df)} rows successfully.")
+            st.dataframe(uploaded_df)
+        except Exception as e:
+            st.error(f"❌ Error reading file: {e}")
+
+    # Craigslist Fetch
     df = get_data(region)
     if df.empty:
-        st.info("No leads found yet. Click **Refresh** below.")
+        st.info("No Craigslist leads found yet. Click **Refresh** below.")
     else:
         st.dataframe(df)
+
     if st.button("Refresh now"):
         get_data.clear()
         df = get_data(region)
         if df.empty:
             st.warning("Still no leads.")
         else:
-            st.success(f"Fetched {len(df)} leads.")
+            st.success(f"Fetched {len(df)} Craigslist leads.")
             st.dataframe(df)
 
 # ─── Dashboard page ─────────────────────────────
