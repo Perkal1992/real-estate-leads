@@ -4,120 +4,129 @@ from bs4 import BeautifulSoup
 from datetime import datetime
 from supabase import create_client
 
-# ───── Supabase Setup ─────
-SUPABASE_URL   = os.getenv("SUPABASE_URL")
-SUPABASE_KEY   = os.getenv("SUPABASE_KEY")
-RAPIDAPI_KEY   = os.getenv("RAPIDAPI_KEY")
-supabase       = create_client(SUPABASE_URL, SUPABASE_KEY)
+# ───── Config ─────
+TARGET_URL           = "https://dallas.craigslist.org/search/rea?hasPic=1"
+HOT_WORDS            = ["cash", "as-is", "must sell", "motivated", "investor"]
+
+SUPABASE_URL         = os.getenv("SUPABASE_URL")
+SUPABASE_KEY         = os.getenv("SUPABASE_KEY")
+GOOGLE_MAPS_API_KEY  = os.getenv("GOOGLE_MAPS_API_KEY")
+RAPIDAPI_KEY         = os.getenv("RAPIDAPI_KEY")
+AIRTABLE_API_KEY     = os.getenv("AIRTABLE_API_KEY")
+AIRTABLE_BASE_ID     = os.getenv("AIRTABLE_BASE_ID")
+AIRTABLE_TABLE_NAME  = os.getenv("AIRTABLE_TABLE_NAME")
+
+# ───── Clients ─────
+supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
 
 print("🚀 Scraper started at", datetime.utcnow().isoformat())
 
-def insert_lead(title, source, is_hot=False):
-    post = {
-        "title":      title,
-        "date_posted": datetime.utcnow().isoformat(),
-        "source":     source,
-        "is_hot":     is_hot
-    }
+def geocode(address):
+    url = "https://maps.googleapis.com/maps/api/geocode/json"
+    params = {"address": address, "key": GOOGLE_MAPS_API_KEY}
+    res = requests.get(url, params=params).json()
+    if res.get("status") == "OK":
+        loc = res["results"][0]["geometry"]["location"]
+        return loc["lat"], loc["lng"]
+    return None, None
+
+def get_street_view_url(lat, lng):
+    return (
+        f"https://maps.googleapis.com/maps/api/streetview"
+        f"?size=600x300&location={lat},{lng}&key={GOOGLE_MAPS_API_KEY}"
+    ) if lat and lng else None
+
+def insert_supabase(record):
     try:
-        supabase.table("craigslist_leads").insert(post).execute()
-        print(f"✅ {source} lead: {title}")
+        supabase.table("craigslist_leads").insert(record).execute()
     except Exception as e:
-        print(f"❌ Failed to insert {source} lead:", e)
+        print("❌ Supabase insert error:", e)
+
+def insert_airtable(record):
+    url = f"https://api.airtable.com/v0/{AIRTABLE_BASE_ID}/{AIRTABLE_TABLE_NAME}"
+    headers = {
+        "Authorization": f"Bearer {AIRTABLE_API_KEY}",
+        "Content-Type": "application/json"
+    }
+    payload = {"fields": record}
+    try:
+        r = requests.post(url, json=payload, headers=headers)
+        if not r.ok:
+            print("❌ Airtable error:", r.text)
+    except Exception as e:
+        print("❌ Airtable request failed:", e)
+
+def process_lead(title, source, price=None):
+    is_hot = any(w in title.lower() for w in HOT_WORDS)
+    lat, lng = geocode(title)
+    arv = int(price * 1.1) if price else None
+    sv_url = get_street_view_url(lat, lng)
+    
+    record = {
+        "title":         title,
+        "source":        source,
+        "date_posted":   datetime.utcnow().isoformat(),
+        "is_hot":        is_hot,
+        **({"price": price} if price else {}),
+        **({"arv": arv} if arv else {}),
+        **({"latitude": lat, "longitude": lng} if lat else {}),
+        **({"street_view_url": sv_url} if sv_url else {})
+    }
+    print(f"✅ {source} lead:", title)
+    insert_supabase(record)
+    insert_airtable(record)
 
 # ───── Craigslist ─────
 try:
     print("📡 Scraping Craigslist…")
-    url = "https://dallas.craigslist.org/search/rea?hasPic=1"
-    res = requests.get(url)
+    res  = requests.get(TARGET_URL)
     soup = BeautifulSoup(res.text, "html.parser")
-    hot_words = ["cash","as-is","must sell","motivated","investor"]
     existing = supabase.table("craigslist_leads").select("title").limit(1000).execute().data
     seen = {r["title"] for r in existing}
-    for row in soup.select(".result-row .result-title"):
-        t = row.text.strip()
-        if t in seen: continue
-        insert_lead(t, "craigslist", any(w in t.lower() for w in hot_words))
+    for item in soup.select(".result-row"):
+        title_elem = item.select_one(".result-title")
+        price_elem = item.select_one(".result-price")
+        if not title_elem: continue
+        title = title_elem.text.strip()
+        if title in seen: continue
+        price = int(price_elem.text.replace("$","").replace(",","")) if price_elem else None
+        process_lead(title, "craigslist", price)
 except Exception as e:
     print("❌ Craigslist failed:", e)
 
 # ───── Zillow FSBO ─────
 try:
     print("📡 Scraping Zillow FSBO…")
-    z_url = "https://zillow-com1.p.rapidapi.com/propertyExtendedSearch"
-    z_hdr = {
-        "X-RapidAPI-Key": RAPIDAPI_KEY,
-        "X-RapidAPI-Host":"zillow-com1.p.rapidapi.com"
-    }
-    z_prm = {"location":"Dallas, TX","status_type":"ForSaleByOwner"}
-    z_res = requests.get(z_url, headers=z_hdr, params=z_prm).json()
-    for p in z_res.get("props", []):
-        insert_lead(p.get("address","Unknown"), "zillow_fsbo")
+    z = requests.get(
+        "https://zillow-com1.p.rapidapi.com/propertyExtendedSearch",
+        headers={
+            "X-RapidAPI-Key": RAPIDAPI_KEY,
+            "X-RapidAPI-Host": "zillow-com1.p.rapidapi.com"
+        },
+        params={"location":"Dallas, TX","status_type":"ForSaleByOwner"}
+    ).json()
+    for p in z.get("props", []):
+        address = p.get("address", "Unknown address")
+        price   = p.get("price") if p.get("price") else None
+        process_lead(address, "zillow_fsbo", price)
 except Exception as e:
     print("❌ Zillow FSBO failed:", e)
 
 # ───── Facebook Marketplace ─────
 try:
     print("📡 Scraping Facebook Marketplace…")
-    f_url = "https://facebook-marketplace1.p.rapidapi.com/search"
-    f_hdr = {
-        "X-RapidAPI-Key": RAPIDAPI_KEY,
-        "X-RapidAPI-Host":"facebook-marketplace1.p.rapidapi.com"
-    }
-    f_prm = {"city":"Dallas","daysSinceListed":1,"sort":"newest"}
-    f_res = requests.get(f_url, headers=f_hdr, params=f_prm).json()
-    for l in f_res.get("listings", []):
-        insert_lead(l.get("marketplace_listing_title","No title"), "facebook")
+    f = requests.get(
+        "https://facebook-marketplace1.p.rapidapi.com/search",
+        headers={
+            "X-RapidAPI-Key": RAPIDAPI_KEY,
+            "X-RapidAPI-Host": "facebook-marketplace1.p.rapidapi.com"
+        },
+        params={"city":"Dallas","daysSinceListed":1,"sort":"newest"}
+    ).json()
+    for l in f.get("listings", []):
+        title = l.get("marketplace_listing_title","No title")
+        process_lead(title, "facebook")
 except Exception as e:
-    print("❌ Facebook failed:", e)
+    print("❌ Facebook Marketplace failed:", e)
 
-print("✅ Scraper run complete.")
-
-def is_hot_lead(title: str) -> bool:
-    title_lower = title.lower()
-    return any(word in title_lower for word in HOT_WORDS)
-
-def fetch_existing_titles() -> set:
-    try:
-        result = supabase.table("craigslist_leads").select("title").limit(1000).execute()
-        return {item["title"] for item in result.data}
-    except Exception as e:
-        print("Error fetching existing titles:", e)
-        return set()
-
-def scrape():
-    print(f"Scraping {TARGET_URL} ...")
-    res = requests.get(TARGET_URL)
-    soup = BeautifulSoup(res.text, "html.parser")
-    listings = soup.select(".result-row")
-    
-    print(f"Found {len(listings)} listings.")
-    existing_titles = fetch_existing_titles()
-
-    for item in listings:
-        title_elem = item.select_one(".result-title")
-        if not title_elem:
-            continue
-        title = normalize_title(title_elem.text)
-        if title in existing_titles:
-            continue  # skip duplicates
-
-        post = {
-            "title": title,
-            "date_posted": datetime.utcnow().isoformat(),
-            "source": SOURCE,
-            "is_hot": is_hot_lead(title)
-        }
-
-        try:
-            supabase.table("craigslist_leads").insert(post).execute()
-            print("✅ Inserted:", title)
-        except Exception as err:
-            print("❌ Insert error:", err)
-
-if __name__ == "__main__":
-    try:
-        scrape()
-        print("✅ Scraper finished successfully.")
-    except Exception as e:
-        print("❌ Critical error in scraper:", e)
+print("✅ All scrapers done.")
