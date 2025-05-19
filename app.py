@@ -4,7 +4,7 @@ import streamlit as st
 import pandas as pd
 import altair as alt
 import pydeck as pdk
-from scraper import fetch_and_store
+from supabase import create_client
 from datetime import datetime
 
 # ─── Helper to load a local image as Base64 ─────────────────────────────────────
@@ -91,8 +91,17 @@ st.markdown(
 # ─── Data fetching & processing ────────────────────────────────────
 @st.cache_data(ttl=300, show_spinner=False)
 def get_data(region: str) -> pd.DataFrame:
-    raw = fetch_and_store(region=region)
-    df = pd.DataFrame(raw)
+    # Connect to Supabase
+    SUPABASE_URL = os.getenv("SUPABASE_URL")
+    SUPABASE_KEY = os.getenv("SUPABASE_KEY")
+    supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
+
+    # Fetch leads
+    resp = supabase.table("craigslist_leads") \
+                    .select("*") \
+                    .order("date_posted", desc=True) \
+                    .execute()
+    df = pd.DataFrame(resp.data)
     if df.empty:
         return df
 
@@ -100,16 +109,16 @@ def get_data(region: str) -> pd.DataFrame:
     df["date_posted"] = pd.to_datetime(df["date_posted"], errors="coerce")
     df["price"]       = pd.to_numeric(df["price"], errors="coerce")
 
-    # Compute ARV if not already present
+    # Compute ARV if missing
     if "arv" not in df.columns:
         df["arv"] = df["price"].apply(lambda x: int(x * 1.1) if pd.notna(x) else None)
 
-    # Compute hot‐deal flag if not already present
+    # Compute hot-deal flag if missing
     if "is_hot" not in df.columns:
         HOT_WORDS = ["cash", "as-is", "must sell", "motivated", "investor"]
         df["is_hot"] = df["title"].str.lower().apply(lambda t: any(w in t for w in HOT_WORDS))
 
-    # Build map & street-view URLs
+    # Build Google Maps & Street View URLs
     def make_map(r):
         if pd.notna(r.get("latitude")) and pd.notna(r.get("longitude")):
             return f"https://www.google.com/maps/search/?api=1&query={r.latitude},{r.longitude}"
@@ -124,8 +133,8 @@ def get_data(region: str) -> pd.DataFrame:
             )
         return None
 
-    df["map_url"]          = df.apply(make_map, axis=1)
-    df["street_view_url"]  = df.apply(make_sv, axis=1)
+    df["map_url"]         = df.apply(make_map, axis=1)
+    df["street_view_url"] = df.apply(make_sv, axis=1)
 
     return df
 
@@ -155,18 +164,16 @@ if page == "Leads":
     if df.empty:
         st.info("No leads found yet. Click **Refresh** below.")
     else:
-        # Show key columns & clickable links
         display = df.copy()
         display["Hot"]         = display["is_hot"].apply(lambda v: "🔥" if v else "")
         display["Map"]         = display["map_url"].apply(lambda u: f"[Map]({u})" if u else "")
         display["Street View"] = display["street_view_url"].apply(lambda u: f"[SV]({u})" if u else "")
         st.dataframe(display[[
             "date_posted", "source", "title", "price", "arv", "Hot", "Map", "Street View"
-        ]])
+        ]], use_container_width=True)
 
     if st.button("🔄 Refresh now"):
         get_data.clear()
-        df = get_data(region)
         st.experimental_rerun()
 
 # ─── Dashboard page ─────────────────────────────
@@ -177,9 +184,8 @@ elif page == "Dashboard":
         st.info("No data to chart.")
         st.stop()
 
-    # --- filters ---
-    cols = ["source"] if "source" in df.columns else []
-    sources = df["source"].unique().tolist() if cols else []
+    # Filters
+    sources = df["source"].unique().tolist()
     sel_sources = st.multiselect("Filter by source", sources, default=sources)
     if sel_sources:
         df = df[df["source"].isin(sel_sources)]
@@ -187,15 +193,15 @@ elif page == "Dashboard":
     if hot_only:
         df = df[df["is_hot"] == True]
 
-    # --- top metrics ---
-    total      = len(df)
-    avg_price  = df["price"].mean()
+    # Metrics
+    total     = len(df)
+    avg_price = df["price"].mean()
     c1, c2, c3 = st.columns(3)
     c1.metric("Total Leads", total)
     c2.metric("Average Price", f"${avg_price:,.0f}" if not pd.isna(avg_price) else "—")
     c3.metric("Date Range", f"{df.date_posted.min().date()} → {df.date_posted.max().date()}")
 
-    # --- time series chart ---
+    # Time series chart
     chart = (
         alt.Chart(df)
            .mark_line(point=True)
@@ -208,7 +214,7 @@ elif page == "Dashboard":
     )
     st.altair_chart(chart, use_container_width=True)
 
-    # --- map view ---
+    # Map view
     if {"latitude", "longitude"}.issubset(df.columns):
         df_map = df.dropna(subset=["latitude", "longitude"])
         st.subheader("Lead Locations")
@@ -240,6 +246,5 @@ elif page == "Settings":
     - `is_hot` (boolean)
     - `latitude` (float), `longitude` (float)
     - `street_view_url` (text)
-    - `fetched_at` or `timestamp` (timestamptz default now())
     """)
-    st.write("To change region, set the `CRAIGS_REGION` env var or edit the fetch call.")
+    st.write("To change region, set the `CRAIGS_REGION` env var or edit the code.")
