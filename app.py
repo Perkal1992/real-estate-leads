@@ -91,7 +91,12 @@ st.markdown(
 # ─── Data caching & enrichment ────────────────────────────────────
 @st.cache_data(ttl=300, show_spinner=False)
 def get_data(region: str) -> pd.DataFrame:
-    supabase = create_client(os.getenv("SUPABASE_URL"), os.getenv("SUPABASE_KEY"))
+    # connect to Supabase
+    url = os.getenv("SUPABASE_URL")
+    key = os.getenv("SUPABASE_KEY")
+    supabase = create_client(url, key)
+
+    # fetch all leads
     resp = supabase.table("craigslist_leads") \
                    .select("*") \
                    .order("date_posted", desc=True) \
@@ -100,18 +105,18 @@ def get_data(region: str) -> pd.DataFrame:
     if df.empty:
         return df
 
-    # Normalize types
+    # normalize
     df["price"]       = pd.to_numeric(df.get("price"), errors="coerce")
     df["date_posted"] = pd.to_datetime(df.get("date_posted"), errors="coerce")
 
-    # ARV = 1.1 × price
+    # compute ARV
     df["arv"] = df["price"].apply(lambda x: int(x * 1.1) if pd.notna(x) else None)
 
-    # Hot-deal flag
+    # compute hot-deal flag
     HOT_WORDS = ["cash", "as-is", "must sell", "motivated", "investor"]
     df["is_hot"] = df["title"].str.lower().apply(lambda t: any(w in t for w in HOT_WORDS))
 
-    # Build Google Maps & Street View URLs
+    # build map & street-view URLs
     def mkmap(r):
         if pd.notna(r.get("latitude")) and pd.notna(r.get("longitude")):
             return f"https://www.google.com/maps/search/?api=1&query={r.latitude},{r.longitude}"
@@ -131,41 +136,38 @@ def get_data(region: str) -> pd.DataFrame:
 
     return df
 
-# ─── Sidebar & Navigation ─────────────────────────────────────────
+# ─── Sidebar navigation ───────────────────────────────
 region = os.getenv("CRAIGS_REGION", "dallas")
 st.sidebar.image("logo.png", width=48)
 st.sidebar.title("Savory Realty Investments")
 page = st.sidebar.radio("", ["Leads", "Dashboard", "Settings"])
 
-# ─── Leads page ───────────────────────────────────────────────────
+# ─── Leads page ──────────────────────────────────
 if page == "Leads":
     st.header("Latest Craigslist Listings")
 
-    # CSV Upload
+    # CSV upload
     st.markdown("---\n#### 📂 Upload Your Own Lead File (CSV)")
     uploaded_file = st.file_uploader("Upload CSV", type=["csv"])
     if uploaded_file:
-        try:
-            uploaded_df = pd.read_csv(uploaded_file)
-            st.success(f"✅ Uploaded {len(uploaded_df)} rows.")
-            st.dataframe(uploaded_df)
-        except Exception as e:
-            st.error(f"❌ Error reading file: {e}")
+        df_up = pd.read_csv(uploaded_file)
+        st.success(f"✅ Uploaded {len(df_up)} rows.")
+        st.dataframe(df_up)
 
-    # Fetch & display from Supabase
+    # fetch & display
     df = get_data(region)
     if df.empty:
         st.info("No leads found yet. Click **Refresh** below.")
     else:
         disp = df.copy()
         disp["Hot"]         = disp["is_hot"].apply(lambda v: "🔥" if v else "")
-        disp["Map"]         = disp["map_url"].apply(lambda u: f"[Map]({u})" if u else "")
-        disp["Street View"] = disp["street_view_url"].apply(lambda u: f"[SV]({u})" if u else "")
+        disp["Map"]         = disp["map_url"].apply(lambda u: u or "")
+        disp["Street View"] = disp["street_view_url"].apply(lambda u: u or "")
         st.dataframe(disp[[
             "date_posted", "source", "title", "price", "arv", "Hot", "Map", "Street View"
         ]], use_container_width=True)
 
-        # Download CSV
+        # download CSV
         csv_data = disp.to_csv(index=False)
         st.download_button("📥 Download CSV", csv_data, "leads.csv", "text/csv")
 
@@ -173,49 +175,48 @@ if page == "Leads":
         get_data.clear()
         st.experimental_rerun()
 
-# ─── Dashboard page ────────────────────────────────────────────────
+# ─── Dashboard page ─────────────────────────────
 elif page == "Dashboard":
     st.header("Analytics Dashboard")
     df = get_data(region)
     if df.empty:
         st.info("No data to chart."); st.stop()
 
-    # Source filter
+    # source filter
     sources = df["source"].unique().tolist()
-    sel_sources = st.multiselect("Filter by source", sources, default=sources)
-    if sel_sources:
-        df = df[df["source"].isin(sel_sources)]
+    sel     = st.multiselect("Filter by source", sources, default=sources)
+    if sel:
+        df = df[df["source"].isin(sel)]
 
-    # Hot-deals only
+    # hot-deals only
     if st.checkbox("Hot deals only", value=False):
         df = df[df["is_hot"]]
 
-    # Date-range slider
-    min_d = df["date_posted"].dt.date.min()
-    max_d = df["date_posted"].dt.date.max()
-    start, end = st.slider("Date range", min_d, max_d, (min_d, max_d))
+    # date-range slider
+    mn = df["date_posted"].dt.date.min()
+    mx = df["date_posted"].dt.date.max()
+    start, end = st.slider("Date range", mn, mx, (mn, mx))
     df = df[df["date_posted"].dt.date.between(start, end)]
 
-    # Top metrics
+    # metrics
     c1, c2, c3 = st.columns(3)
     c1.metric("Total Leads", len(df))
     c2.metric("Average Price", f"${df['price'].mean():,.0f}" if not pd.isna(df["price"].mean()) else "—")
     c3.metric("Date Range", f"{start} → {end}")
 
-    # Time series chart
+    # time series chart
     chart = (
         alt.Chart(df)
            .mark_line(point=True)
            .encode(
-               x="date_posted:T",
-               y="price:Q",
+               x="date_posted:T", y="price:Q",
                tooltip=["title", "price", "date_posted"],
            )
            .properties(height=350)
     )
     st.altair_chart(chart, use_container_width=True)
 
-    # Map view
+    # map view
     if {"latitude", "longitude"}.issubset(df.columns):
         df_map = df.dropna(subset=["latitude", "longitude"])
         st.subheader("Lead Locations")
@@ -233,7 +234,7 @@ elif page == "Dashboard":
         )
         st.pydeck_chart(pdk.Deck(initial_view_state=view, layers=[layer]))
 
-# ─── Settings page ───────────────────────────────────────────────
+# ─── Settings page ──────────────────────────────
 else:
     st.header("Settings")
     st.write("Make sure your Supabase table `craigslist_leads` has these columns:")
