@@ -4,7 +4,7 @@ import streamlit as st
 import pandas as pd
 import altair as alt
 import pydeck as pdk
-from scraper import fetch_and_store
+from supabase import create_client
 from datetime import datetime
 
 # ─── Helper to load a local image as Base64 ─────────────────────────────────────
@@ -91,43 +91,53 @@ st.markdown(
 # ─── Data caching & enrichment ────────────────────────────────────
 @st.cache_data(ttl=300, show_spinner=False)
 def get_data(region: str) -> pd.DataFrame:
-    raw = fetch_and_store(region=region)
-    df = pd.DataFrame(raw)
+    supabase = create_client(os.getenv("SUPABASE_URL"), os.getenv("SUPABASE_KEY"))
+    resp = supabase.table("craigslist_leads") \
+                   .select("*") \
+                   .order("date_posted", desc=True) \
+                   .execute()
+    df = pd.DataFrame(resp.data)
     if df.empty:
         return df
 
-    # Normalize
+    # Normalize types
     df["price"]       = pd.to_numeric(df.get("price"), errors="coerce")
     df["date_posted"] = pd.to_datetime(df.get("date_posted"), errors="coerce")
 
-    # ARV = 1.1× price
+    # ARV = 1.1 × price
     df["arv"] = df["price"].apply(lambda x: int(x * 1.1) if pd.notna(x) else None)
 
     # Hot-deal flag
     HOT_WORDS = ["cash", "as-is", "must sell", "motivated", "investor"]
     df["is_hot"] = df["title"].str.lower().apply(lambda t: any(w in t for w in HOT_WORDS))
 
-    # Google Maps & Street View URLs
+    # Build Google Maps & Street View URLs
     def mkmap(r):
         if pd.notna(r.get("latitude")) and pd.notna(r.get("longitude")):
             return f"https://www.google.com/maps/search/?api=1&query={r.latitude},{r.longitude}"
+        return None
+
     def mksv(r):
         if pd.notna(r.get("latitude")) and pd.notna(r.get("longitude")):
             key = os.getenv("GOOGLE_MAPS_API_KEY")
-            return (f"https://maps.googleapis.com/maps/api/streetview"
-                    f"?size=600x300&location={r.latitude},{r.longitude}&key={key}")
-    df["map_url"]          = df.apply(mkmap, axis=1)
-    df["street_view_url"]  = df.apply(mksv, axis=1)
+            return (
+                f"https://maps.googleapis.com/maps/api/streetview"
+                f"?size=600x300&location={r.latitude},{r.longitude}&key={key}"
+            )
+        return None
+
+    df["map_url"]         = df.apply(mkmap, axis=1)
+    df["street_view_url"] = df.apply(mksv, axis=1)
 
     return df
 
-# ─── Sidebar navigation ───────────────────────────────
+# ─── Sidebar & Navigation ─────────────────────────────────────────
 region = os.getenv("CRAIGS_REGION", "dallas")
 st.sidebar.image("logo.png", width=48)
 st.sidebar.title("Savory Realty Investments")
 page = st.sidebar.radio("", ["Leads", "Dashboard", "Settings"])
 
-# ─── Leads page ──────────────────────────────────
+# ─── Leads page ───────────────────────────────────────────────────
 if page == "Leads":
     st.header("Latest Craigslist Listings")
 
@@ -142,17 +152,17 @@ if page == "Leads":
         except Exception as e:
             st.error(f"❌ Error reading file: {e}")
 
-    # Fetch & display
+    # Fetch & display from Supabase
     df = get_data(region)
     if df.empty:
-        st.info("No leads yet. Click **Refresh** below.")
+        st.info("No leads found yet. Click **Refresh** below.")
     else:
         disp = df.copy()
         disp["Hot"]         = disp["is_hot"].apply(lambda v: "🔥" if v else "")
         disp["Map"]         = disp["map_url"].apply(lambda u: f"[Map]({u})" if u else "")
         disp["Street View"] = disp["street_view_url"].apply(lambda u: f"[SV]({u})" if u else "")
         st.dataframe(disp[[
-            "date_posted","source","title","price","arv","Hot","Map","Street View"
+            "date_posted", "source", "title", "price", "arv", "Hot", "Map", "Street View"
         ]], use_container_width=True)
 
         # Download CSV
@@ -163,7 +173,7 @@ if page == "Leads":
         get_data.clear()
         st.experimental_rerun()
 
-# ─── Dashboard page ─────────────────────────────
+# ─── Dashboard page ────────────────────────────────────────────────
 elif page == "Dashboard":
     st.header("Analytics Dashboard")
     df = get_data(region)
@@ -171,13 +181,13 @@ elif page == "Dashboard":
         st.info("No data to chart."); st.stop()
 
     # Source filter
-    sources    = df["source"].unique().tolist()
+    sources = df["source"].unique().tolist()
     sel_sources = st.multiselect("Filter by source", sources, default=sources)
-    df = df[df["source"].isin(sel_sources)] if sel_sources else df
+    if sel_sources:
+        df = df[df["source"].isin(sel_sources)]
 
     # Hot-deals only
-    hot_only = st.checkbox("Hot deals only", value=False)
-    if hot_only:
+    if st.checkbox("Hot deals only", value=False):
         df = df[df["is_hot"]]
 
     # Date-range slider
@@ -187,28 +197,27 @@ elif page == "Dashboard":
     df = df[df["date_posted"].dt.date.between(start, end)]
 
     # Top metrics
-    total     = len(df)
-    avg_price = df["price"].mean()
     c1, c2, c3 = st.columns(3)
-    c1.metric("Total Leads", total)
-    c2.metric("Average Price", f"${avg_price:,.0f}" if not pd.isna(avg_price) else "—")
+    c1.metric("Total Leads", len(df))
+    c2.metric("Average Price", f"${df['price'].mean():,.0f}" if not pd.isna(df["price"].mean()) else "—")
     c3.metric("Date Range", f"{start} → {end}")
 
-    # Price over time
+    # Time series chart
     chart = (
         alt.Chart(df)
            .mark_line(point=True)
            .encode(
-               x="date_posted:T", y="price:Q",
-               tooltip=["title","price","date_posted"],
+               x="date_posted:T",
+               y="price:Q",
+               tooltip=["title", "price", "date_posted"],
            )
            .properties(height=350)
     )
     st.altair_chart(chart, use_container_width=True)
 
     # Map view
-    if {"latitude","longitude"}.issubset(df.columns):
-        df_map = df.dropna(subset=["latitude","longitude"])
+    if {"latitude", "longitude"}.issubset(df.columns):
+        df_map = df.dropna(subset=["latitude", "longitude"])
         st.subheader("Lead Locations")
         view = pdk.ViewState(
             latitude=df_map["latitude"].mean(),
@@ -216,12 +225,15 @@ elif page == "Dashboard":
             zoom=11,
         )
         layer = pdk.Layer(
-            "ScatterplotLayer", data=df_map,
-            get_position=["longitude","latitude"], get_radius=100, pickable=True
+            "ScatterplotLayer",
+            data=df_map,
+            get_position=["longitude", "latitude"],
+            get_radius=100,
+            pickable=True,
         )
         st.pydeck_chart(pdk.Deck(initial_view_state=view, layers=[layer]))
 
-# ─── Settings page ──────────────────────────────
+# ─── Settings page ───────────────────────────────────────────────
 else:
     st.header("Settings")
     st.write("Make sure your Supabase table `craigslist_leads` has these columns:")
