@@ -1,3 +1,4 @@
+print("🔥 scrapers.py is running latest logic...")
 import os
 import requests
 from bs4 import BeautifulSoup
