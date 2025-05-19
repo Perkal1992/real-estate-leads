@@ -4,7 +4,7 @@ import streamlit as st
 import pandas as pd
 import altair as alt
 import pydeck as pdk
-from supabase import create_client
+from scraper import fetch_and_store
 from datetime import datetime
 
 # ─── Helper to load a local image as Base64 ─────────────────────────────────────
@@ -19,120 +19,77 @@ st.set_page_config(
     page_icon="logo.png",
     layout="wide",
 )
-st.markdown(
-    f"""
-    <style>
-      [data-testid="stAppViewContainer"] {{
-        background-image: url("data:image/png;base64,{background_base64}");
-        background-repeat: no-repeat;
-        background-position: center center;
-        background-attachment: fixed;
-        background-size: cover;
-        overflow: auto !important;
-      }}
-      [data-testid="stAppViewContainer"]::before {{
-        content: "";
-        position: absolute; top:0; left:0;
-        width:100%; height:100%;
-        background: rgba(0,0,0,0.6);
-        z-index: 0;
-        pointer-events: none;
-      }}
-      [data-testid="stAppViewContainer"] > * {{
-        position: relative; z-index: 1;
-      }}
-      header [data-testid="collapsedControl"],
-      header button[aria-label="Expand sidebar"],
-      header button[aria-label="Collapse sidebar"] {{
-        position: absolute !important;
-        top: 10px !important;
-        left: 10px !important;
-        z-index: 1000 !important;
-        transform: none !important;
-      }}
-      @media screen and (max-width: 768px) {{
-        .stDataFrame, .stDataFrame > div {{
-          overflow-x: auto !important;
-          font-size: 14px !important;
-        }}
-        .stButton > button {{
-          width: 100% !important;
-          font-size: 16px !important;
-        }}
-      }}
-    </style>
-    """,
-    unsafe_allow_html=True,
-)
-st.markdown(
-    """
-    <style>
-      [data-testid="stSidebar"] { background-color: rgba(0,0,0,0.7); }
-      .stButton>button { background-color: #0a84ff; color: #fff; }
-    </style>
-    """,
-    unsafe_allow_html=True,
-)
-st.markdown(
-    """
-    <style>
-      [data-testid="stDataFrame"],
-      [data-testid="stDataFrame"] > div,
-      [data-testid="stAltairChart"],
-      [data-testid="stAltairChart"] > div {
-        background-color: rgba(255,255,255,0.8) !important;
-        backdrop-filter: blur(6px);
-      }
-    </style>
-    """,
-    unsafe_allow_html=True,
-)
+st.markdown(f"""
+<style>
+  [data-testid="stAppViewContainer"] {{
+    background-image: url("data:image/png;base64,{background_base64}");
+    background-repeat: no-repeat;
+    background-position: center center;
+    background-attachment: fixed;
+    background-size: cover;
+    overflow: auto !important;
+  }}
+  [data-testid="stAppViewContainer"]::before {{
+    content: "";
+    position: absolute; top:0; left:0;
+    width:100%; height:100%;
+    background: rgba(0,0,0,0.6);
+    z-index: 0;
+    pointer-events: none;
+  }}
+  [data-testid="stAppViewContainer"] > * {{ position: relative; z-index: 1; }}
+  header [data-testid="collapsedControl"],
+  header button[aria-label="Expand sidebar"],
+  header button[aria-label="Collapse sidebar"] {{
+    position: absolute !important;
+    top: 10px !important; left: 10px !important;
+    z-index: 1000 !important; transform: none !important;
+  }}
+  @media (max-width:768px) {{
+    .stDataFrame, .stDataFrame > div {{ overflow-x:auto !important; font-size:14px !important; }}
+    .stButton > button {{ width:100% !important; font-size:16px !important; }}
+  }}
+  [data-testid="stSidebar"] {{ background-color: rgba(0,0,0,0.7); }}
+  .stButton>button {{ background-color:#0a84ff; color:#fff; }}
+  [data-testid="stDataFrame"], [data-testid="stDataFrame"]>div,
+  [data-testid="stAltairChart"], [data-testid="stAltairChart"]>div {{
+    background-color:rgba(255,255,255,0.8) !important; backdrop-filter: blur(6px);
+  }}
+</style>
+""", unsafe_allow_html=True)
 
 # ─── Data caching & enrichment ────────────────────────────────────
 @st.cache_data(ttl=300, show_spinner=False)
 def get_data(region: str) -> pd.DataFrame:
-    # connect to Supabase
-    url = os.getenv("SUPABASE_URL")
-    key = os.getenv("SUPABASE_KEY")
-    supabase = create_client(url, key)
-
-    # fetch all leads
-    resp = supabase.table("craigslist_leads") \
-                   .select("*") \
-                   .order("date_posted", desc=True) \
-                   .execute()
-    df = pd.DataFrame(resp.data)
+    raw = fetch_and_store(region=region)
+    df = pd.DataFrame(raw)
     if df.empty:
         return df
 
-    # normalize
+    # Normalize
     df["price"]       = pd.to_numeric(df.get("price"), errors="coerce")
     df["date_posted"] = pd.to_datetime(df.get("date_posted"), errors="coerce")
 
-    # compute ARV
+    # ARV = price × 1.1
     df["arv"] = df["price"].apply(lambda x: int(x * 1.1) if pd.notna(x) else None)
 
-    # compute hot-deal flag
+    # Hot-deal flag
     HOT_WORDS = ["cash", "as-is", "must sell", "motivated", "investor"]
     df["is_hot"] = df["title"].str.lower().apply(lambda t: any(w in t for w in HOT_WORDS))
 
-    # build map & street-view URLs
-    def mkmap(r):
-        if pd.notna(r.get("latitude")) and pd.notna(r.get("longitude")):
-            return f"https://www.google.com/maps/search/?api=1&query={r.latitude},{r.longitude}"
-        return None
-
-    def mksv(r):
-        if pd.notna(r.get("latitude")) and pd.notna(r.get("longitude")):
-            key = os.getenv("GOOGLE_MAPS_API_KEY")
-            return (
-                f"https://maps.googleapis.com/maps/api/streetview"
-                f"?size=600x300&location={r.latitude},{r.longitude}&key={key}"
-            )
-        return None
-
-    df["map_url"]         = df.apply(mkmap, axis=1)
-    df["street_view_url"] = df.apply(mksv, axis=1)
+    # Build map & Street View URLs
+    df["map_url"] = df.apply(
+        lambda r: f"https://www.google.com/maps/search/?api=1&query={r.latitude},{r.longitude}"
+                  if pd.notna(r.get("latitude")) and pd.notna(r.get("longitude")) else None,
+        axis=1
+    )
+    df["street_view_url"] = df.apply(
+        lambda r: (
+            f"https://maps.googleapis.com/maps/api/streetview"
+            f"?size=600x300&location={r.latitude},{r.longitude}&key={os.getenv('GOOGLE_MAPS_API_KEY')}"
+        ) if pd.notna(r.get("latitude")) and pd.notna(r.get("longitude")) else None,
+        axis=1
+    )
 
     return df
 
@@ -146,28 +103,30 @@ page = st.sidebar.radio("", ["Leads", "Dashboard", "Settings"])
 if page == "Leads":
     st.header("Latest Craigslist Listings")
 
-    # CSV upload
+    # CSV Upload
     st.markdown("---\n#### 📂 Upload Your Own Lead File (CSV)")
     uploaded_file = st.file_uploader("Upload CSV", type=["csv"])
     if uploaded_file:
-        df_up = pd.read_csv(uploaded_file)
-        st.success(f"✅ Uploaded {len(df_up)} rows.")
-        st.dataframe(df_up)
+        uploaded_df = pd.read_csv(uploaded_file)
+        st.success(f"✅ Uploaded {len(uploaded_df)} rows.")
+        st.dataframe(uploaded_df)
 
-    # fetch & display
+    # Fetch & display
     df = get_data(region)
     if df.empty:
-        st.info("No leads found yet. Click **Refresh** below.")
+        st.info("No leads yet. Click **Refresh** below.")
     else:
         disp = df.copy()
         disp["Hot"]         = disp["is_hot"].apply(lambda v: "🔥" if v else "")
-        disp["Map"]         = disp["map_url"].apply(lambda u: u or "")
-        disp["Street View"] = disp["street_view_url"].apply(lambda u: u or "")
-        st.dataframe(disp[[
-            "date_posted", "source", "title", "price", "arv", "Hot", "Map", "Street View"
-        ]], use_container_width=True)
+        disp["Map"]         = disp["map_url"].apply(lambda u: f"[Map]({u})" if u else "")
+        disp["Street View"] = disp["street_view_url"].apply(lambda u: f"[SV]({u})" if u else "")
 
-        # download CSV
+        st.dataframe(
+            disp[["date_posted","source","title","price","arv","Hot","Map","Street View"]],
+            use_container_width=True
+        )
+
+        # Download CSV
         csv_data = disp.to_csv(index=False)
         st.download_button("📥 Download CSV", csv_data, "leads.csv", "text/csv")
 
@@ -180,45 +139,47 @@ elif page == "Dashboard":
     st.header("Analytics Dashboard")
     df = get_data(region)
     if df.empty:
-        st.info("No data to chart."); st.stop()
+        st.info("No data to chart.")
+        st.stop()
 
-    # source filter
+    # Source filter
     sources = df["source"].unique().tolist()
-    sel     = st.multiselect("Filter by source", sources, default=sources)
-    if sel:
-        df = df[df["source"].isin(sel)]
+    sel_sources = st.multiselect("Filter by source", sources, default=sources)
+    if sel_sources:
+        df = df[df["source"].isin(sel_sources)]
 
-    # hot-deals only
+    # Hot-deals only
     if st.checkbox("Hot deals only", value=False):
         df = df[df["is_hot"]]
 
-    # date-range slider
+    # Date-range slider
     mn = df["date_posted"].dt.date.min()
     mx = df["date_posted"].dt.date.max()
     start, end = st.slider("Date range", mn, mx, (mn, mx))
     df = df[df["date_posted"].dt.date.between(start, end)]
 
-    # metrics
+    # Metrics
     c1, c2, c3 = st.columns(3)
     c1.metric("Total Leads", len(df))
     c2.metric("Average Price", f"${df['price'].mean():,.0f}" if not pd.isna(df["price"].mean()) else "—")
     c3.metric("Date Range", f"{start} → {end}")
 
-    # time series chart
+    # Price over time
     chart = (
         alt.Chart(df)
            .mark_line(point=True)
            .encode(
-               x="date_posted:T", y="price:Q",
-               tooltip=["title", "price", "date_posted"],
+               x="date_posted:T",
+               y="price:Q",
+               tooltip=["title","price","date_posted"],
            )
-           .properties(height=350)
+           .properties(height=350, width=800)
     )
     st.altair_chart(chart, use_container_width=True)
 
-    # map view
-    if {"latitude", "longitude"}.issubset(df.columns):
-        df_map = df.dropna(subset=["latitude", "longitude"])
+    # Map view
+    if {"latitude","longitude"}.issubset(df.columns):
+        df_map = df.dropna(subset=["latitude","longitude"])
         st.subheader("Lead Locations")
         view = pdk.ViewState(
             latitude=df_map["latitude"].mean(),
@@ -228,7 +189,7 @@ elif page == "Dashboard":
         layer = pdk.Layer(
             "ScatterplotLayer",
             data=df_map,
-            get_position=["longitude", "latitude"],
+            get_position=["longitude","latitude"],
             get_radius=100,
             pickable=True,
         )
