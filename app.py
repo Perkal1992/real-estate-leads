@@ -5,6 +5,7 @@ import pandas as pd
 import altair as alt
 import pydeck as pdk
 from scraper import fetch_and_store
+from datetime import datetime
 
 # ─── Helper to load a local image as Base64 ─────────────────────────────────────
 def _get_base64(image_path: str) -> str:
@@ -18,8 +19,6 @@ st.set_page_config(
     page_icon="logo.png",
     layout="wide",
 )
-
-# ─── CSS Styles (Responsive Sidebar Toggle, Background, Mobile Fixes) ───
 st.markdown(
     f"""
     <style>
@@ -42,7 +41,6 @@ st.markdown(
       [data-testid="stAppViewContainer"] > * {{
         position: relative; z-index: 1;
       }}
-
       header [data-testid="collapsedControl"],
       header button[aria-label="Expand sidebar"],
       header button[aria-label="Collapse sidebar"] {{
@@ -52,7 +50,6 @@ st.markdown(
         z-index: 1000 !important;
         transform: none !important;
       }}
-
       @media screen and (max-width: 768px) {{
         .stDataFrame, .stDataFrame > div {{
           overflow-x: auto !important;
@@ -67,8 +64,6 @@ st.markdown(
     """,
     unsafe_allow_html=True,
 )
-
-# ─── Dark theme tweaks (buttons/sidebar) ─────────────────────────
 st.markdown(
     """
     <style>
@@ -78,8 +73,6 @@ st.markdown(
     """,
     unsafe_allow_html=True,
 )
-
-# ─── Opacity tweaks for panels ──────────────────────────
 st.markdown(
     """
     <style>
@@ -95,15 +88,41 @@ st.markdown(
     unsafe_allow_html=True,
 )
 
-# ─── Data caching ────────────────────────────────────
+# ─── Data caching & enrichment ────────────────────────────────────
 @st.cache_data(ttl=300, show_spinner=False)
 def get_data(region: str) -> pd.DataFrame:
     raw = fetch_and_store(region=region)
-    return pd.DataFrame(raw)
+    df = pd.DataFrame(raw)
+    if df.empty:
+        return df
 
-region = os.getenv("CRAIGS_REGION", "dallas")
+    # Normalize
+    df["price"]       = pd.to_numeric(df.get("price"), errors="coerce")
+    df["date_posted"] = pd.to_datetime(df.get("date_posted"), errors="coerce")
+
+    # ARV = 1.1× price
+    df["arv"] = df["price"].apply(lambda x: int(x * 1.1) if pd.notna(x) else None)
+
+    # Hot-deal flag
+    HOT_WORDS = ["cash", "as-is", "must sell", "motivated", "investor"]
+    df["is_hot"] = df["title"].str.lower().apply(lambda t: any(w in t for w in HOT_WORDS))
+
+    # Google Maps & Street View URLs
+    def mkmap(r):
+        if pd.notna(r.get("latitude")) and pd.notna(r.get("longitude")):
+            return f"https://www.google.com/maps/search/?api=1&query={r.latitude},{r.longitude}"
+    def mksv(r):
+        if pd.notna(r.get("latitude")) and pd.notna(r.get("longitude")):
+            key = os.getenv("GOOGLE_MAPS_API_KEY")
+            return (f"https://maps.googleapis.com/maps/api/streetview"
+                    f"?size=600x300&location={r.latitude},{r.longitude}&key={key}")
+    df["map_url"]          = df.apply(mkmap, axis=1)
+    df["street_view_url"]  = df.apply(mksv, axis=1)
+
+    return df
 
 # ─── Sidebar navigation ───────────────────────────────
+region = os.getenv("CRAIGS_REGION", "dallas")
 st.sidebar.image("logo.png", width=48)
 st.sidebar.title("Savory Realty Investments")
 page = st.sidebar.radio("", ["Leads", "Dashboard", "Settings"])
@@ -113,86 +132,83 @@ if page == "Leads":
     st.header("Latest Craigslist Listings")
 
     # CSV Upload
-    st.markdown("""---\n#### 📂 Upload Your Own Lead File (CSV)
-Drop a file below to preview:
-""")
+    st.markdown("---\n#### 📂 Upload Your Own Lead File (CSV)")
     uploaded_file = st.file_uploader("Upload CSV", type=["csv"])
-    if uploaded_file is not None:
+    if uploaded_file:
         try:
             uploaded_df = pd.read_csv(uploaded_file)
-            st.success(f"✅ Uploaded {len(uploaded_df)} rows successfully.")
+            st.success(f"✅ Uploaded {len(uploaded_df)} rows.")
             st.dataframe(uploaded_df)
         except Exception as e:
             st.error(f"❌ Error reading file: {e}")
 
-    # Craigslist Fetch
+    # Fetch & display
     df = get_data(region)
     if df.empty:
-        st.info("No Craigslist leads found yet. Click **Refresh** below.")
+        st.info("No leads yet. Click **Refresh** below.")
     else:
-        st.dataframe(df)
+        disp = df.copy()
+        disp["Hot"]         = disp["is_hot"].apply(lambda v: "🔥" if v else "")
+        disp["Map"]         = disp["map_url"].apply(lambda u: f"[Map]({u})" if u else "")
+        disp["Street View"] = disp["street_view_url"].apply(lambda u: f"[SV]({u})" if u else "")
+        st.dataframe(disp[[
+            "date_posted","source","title","price","arv","Hot","Map","Street View"
+        ]], use_container_width=True)
 
-    if st.button("Refresh now"):
+        # Download CSV
+        csv_data = disp.to_csv(index=False)
+        st.download_button("📥 Download CSV", csv_data, "leads.csv", "text/csv")
+
+    if st.button("🔄 Refresh now"):
         get_data.clear()
-        df = get_data(region)
-        if df.empty:
-            st.warning("Still no leads.")
-        else:
-            st.success(f"Fetched {len(df)} Craigslist leads.")
-            st.dataframe(df)
+        st.experimental_rerun()
 
 # ─── Dashboard page ─────────────────────────────
 elif page == "Dashboard":
     st.header("Analytics Dashboard")
     df = get_data(region)
     if df.empty:
-        st.info("No data to chart.")
-        st.stop()
+        st.info("No data to chart."); st.stop()
 
-    df["price"] = pd.to_numeric(df["price"], errors="coerce")
-    df["date_posted"] = pd.to_datetime(df["date_posted"], errors="coerce")
+    # Source filter
+    sources    = df["source"].unique().tolist()
+    sel_sources = st.multiselect("Filter by source", sources, default=sources)
+    df = df[df["source"].isin(sel_sources)] if sel_sources else df
 
-    total = len(df)
+    # Hot-deals only
+    hot_only = st.checkbox("Hot deals only", value=False)
+    if hot_only:
+        df = df[df["is_hot"]]
+
+    # Date-range slider
+    min_d = df["date_posted"].dt.date.min()
+    max_d = df["date_posted"].dt.date.max()
+    start, end = st.slider("Date range", min_d, max_d, (min_d, max_d))
+    df = df[df["date_posted"].dt.date.between(start, end)]
+
+    # Top metrics
+    total     = len(df)
     avg_price = df["price"].mean()
     c1, c2, c3 = st.columns(3)
     c1.metric("Total Leads", total)
     c2.metric("Average Price", f"${avg_price:,.0f}" if not pd.isna(avg_price) else "—")
-    c3.metric(
-        "Date Range",
-        f"{df.date_posted.min().date()} → {df.date_posted.max().date()}",
-    )
+    c3.metric("Date Range", f"{start} → {end}")
 
-    if st.checkbox("Show raw data preview"):
-        st.write("DataFrame shape:", df.shape)
-        st.dataframe(df.head(10))
-
-    date_min, date_max = df.date_posted.min().date(), df.date_posted.max().date()
-    if date_min < date_max:
-        start_date, end_date = st.slider(
-            "Filter by date posted", date_min, date_max, (date_min, date_max)
-        )
-    else:
-        start_date = end_date = date_min
-        st.write(f"Showing data for {date_min}")
-
-    df_filtered = df[df.date_posted.between(
-        pd.to_datetime(start_date), pd.to_datetime(end_date)
-    )]
-
+    # Price over time
     chart = (
-        alt.Chart(df_filtered)
+        alt.Chart(df)
            .mark_line(point=True)
            .encode(
-               x=alt.X("date_posted:T", title="Date Posted"),
-               y=alt.Y("price:Q", title="Price (USD)"),
-               tooltip=["title", "price", "date_posted"],
+               x="date_posted:T", y="price:Q",
+               tooltip=["title","price","date_posted"],
            )
-           .properties(height=350, width=800)
+           .properties(height=350)
     )
     st.altair_chart(chart, use_container_width=True)
 
-    if {"latitude", "longitude"}.issubset(df_filtered.columns):
-        df_map = df_filtered.dropna(subset=["latitude", "longitude"])
+    # Map view
+    if {"latitude","longitude"}.issubset(df.columns):
+        df_map = df.dropna(subset=["latitude","longitude"])
         st.subheader("Lead Locations")
         view = pdk.ViewState(
             latitude=df_map["latitude"].mean(),
@@ -200,29 +216,24 @@ elif page == "Dashboard":
             zoom=11,
         )
         layer = pdk.Layer(
-            "ScatterplotLayer",
-            data=df_map,
-            get_position=["longitude", "latitude"],
-            get_radius=100,
-            pickable=True,
+            "ScatterplotLayer", data=df_map,
+            get_position=["longitude","latitude"], get_radius=100, pickable=True
         )
         st.pydeck_chart(pdk.Deck(initial_view_state=view, layers=[layer]))
 
 # ─── Settings page ──────────────────────────────
-elif page == "Settings":
+else:
     st.header("Settings")
-    st.write("Make sure your Supabase table is named `craigslist_leads` with columns:")
-    st.markdown(
-        """
-        - `id` (uuid primary key)  
-        - `date_posted` (timestamptz)  
-        - `title` (text)  
-        - `link` (text unique)  
-        - `price` (numeric)  
-        - `fetched_at` (timestamptz default now())  
-        - plus any of: latitude, longitude, etc.
-        """
-    )
-    st.write(
-        "To change your region/subdomain, edit the `region = os.getenv(...)` line or update `scraper.py`."
-    )
+    st.write("Make sure your Supabase table `craigslist_leads` has these columns:")
+    st.markdown("""
+      - `id` (uuid primary key)
+      - `date_posted` (timestamptz)
+      - `title` (text)
+      - `source` (text)
+      - `price` (numeric)
+      - `arv` (numeric)
+      - `is_hot` (boolean)
+      - `latitude` (float), `longitude` (float)
+      - `street_view_url` (text)
+    """)
+    st.write("Edit `CRAIGS_REGION` env var to change region.")
