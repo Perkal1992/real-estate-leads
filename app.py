@@ -90,13 +90,11 @@ st.markdown(
 
 # ─── Data fetching & processing ────────────────────────────────────
 @st.cache_data(ttl=300, show_spinner=False)
-def get_data(region: str) -> pd.DataFrame:
-    # Connect to Supabase
+def get_data() -> pd.DataFrame:
     SUPABASE_URL = os.getenv("SUPABASE_URL")
     SUPABASE_KEY = os.getenv("SUPABASE_KEY")
     supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
 
-    # Fetch leads
     resp = supabase.table("craigslist_leads") \
                     .select("*") \
                     .order("date_posted", desc=True) \
@@ -105,20 +103,16 @@ def get_data(region: str) -> pd.DataFrame:
     if df.empty:
         return df
 
-    # Normalize types
     df["date_posted"] = pd.to_datetime(df["date_posted"], errors="coerce")
     df["price"]       = pd.to_numeric(df["price"], errors="coerce")
 
-    # Compute ARV if missing
     if "arv" not in df.columns:
         df["arv"] = df["price"].apply(lambda x: int(x * 1.1) if pd.notna(x) else None)
 
-    # Compute hot-deal flag if missing
     if "is_hot" not in df.columns:
         HOT_WORDS = ["cash", "as-is", "must sell", "motivated", "investor"]
         df["is_hot"] = df["title"].str.lower().apply(lambda t: any(w in t for w in HOT_WORDS))
 
-    # Build Google Maps & Street View URLs
     def make_map(r):
         if pd.notna(r.get("latitude")) and pd.notna(r.get("longitude")):
             return f"https://www.google.com/maps/search/?api=1&query={r.latitude},{r.longitude}"
@@ -138,13 +132,12 @@ def get_data(region: str) -> pd.DataFrame:
 
     return df
 
-# ─── Region & sidebar ───────────────────────────────
-region = os.getenv("CRAIGS_REGION", "dallas")
+# ─── Sidebar & Navigation ─────────────────────────────────────────
 st.sidebar.image("logo.png", width=48)
 st.sidebar.title("Savory Realty Investments")
 page = st.sidebar.radio("", ["Leads", "Dashboard", "Settings"])
 
-# ─── Leads page ──────────────────────────────────
+# ─── Leads page ───────────────────────────────────────────────────
 if page == "Leads":
     st.header("Latest Listings")
 
@@ -160,7 +153,7 @@ if page == "Leads":
             st.error(f"❌ Error reading file: {e}")
 
     # Fetch & display from Supabase
-    df = get_data(region)
+    df = get_data()
     if df.empty:
         st.info("No leads found yet. Click **Refresh** below.")
     else:
@@ -168,30 +161,52 @@ if page == "Leads":
         display["Hot"]         = display["is_hot"].apply(lambda v: "🔥" if v else "")
         display["Map"]         = display["map_url"].apply(lambda u: f"[Map]({u})" if u else "")
         display["Street View"] = display["street_view_url"].apply(lambda u: f"[SV]({u})" if u else "")
+
         st.dataframe(display[[
             "date_posted", "source", "title", "price", "arv", "Hot", "Map", "Street View"
         ]], use_container_width=True)
+
+        # Download button
+        csv = display.to_csv(index=False)
+        st.download_button(
+            label="📥 Download CSV",
+            data=csv,
+            file_name="leads.csv",
+            mime="text/csv",
+        )
 
     if st.button("🔄 Refresh now"):
         get_data.clear()
         st.experimental_rerun()
 
-# ─── Dashboard page ─────────────────────────────
+# ─── Dashboard page ────────────────────────────────────────────────
 elif page == "Dashboard":
     st.header("Analytics Dashboard")
-    df = get_data(region)
+    df = get_data()
     if df.empty:
         st.info("No data to chart.")
         st.stop()
 
-    # Filters
-    sources = df["source"].unique().tolist()
+    # Source filter
+    sources    = df["source"].unique().tolist()
     sel_sources = st.multiselect("Filter by source", sources, default=sources)
-    if sel_sources:
-        df = df[df["source"].isin(sel_sources)]
+    df = df[df["source"].isin(sel_sources)] if sel_sources else df
+
+    # Hot-deal filter
     hot_only = st.checkbox("Hot deals only", value=False)
     if hot_only:
         df = df[df["is_hot"] == True]
+
+    # Date-range slider
+    min_date = df["date_posted"].dt.date.min()
+    max_date = df["date_posted"].dt.date.max()
+    start_date, end_date = st.slider(
+        "Filter by date posted",
+        min_date,
+        max_date,
+        (min_date, max_date)
+    )
+    df = df[df["date_posted"].dt.date.between(start_date, end_date)]
 
     # Metrics
     total     = len(df)
@@ -199,7 +214,7 @@ elif page == "Dashboard":
     c1, c2, c3 = st.columns(3)
     c1.metric("Total Leads", total)
     c2.metric("Average Price", f"${avg_price:,.0f}" if not pd.isna(avg_price) else "—")
-    c3.metric("Date Range", f"{df.date_posted.min().date()} → {df.date_posted.max().date()}")
+    c3.metric("Date Range", f"{start_date} → {end_date}")
 
     # Time series chart
     chart = (
@@ -232,8 +247,8 @@ elif page == "Dashboard":
         )
         st.pydeck_chart(pdk.Deck(initial_view_state=view, layers=[layer]))
 
-# ─── Settings page ──────────────────────────────
-elif page == "Settings":
+# ─── Settings page ───────────────────────────────────────────────
+else:  # Settings
     st.header("Settings")
     st.write("Make sure your Supabase table `craigslist_leads` has these columns:")
     st.markdown("""
