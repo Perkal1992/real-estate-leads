@@ -3,11 +3,14 @@ import requests
 import re
 from datetime import datetime
 from bs4 import BeautifulSoup
-from supabase import create_client, Client
+from supabase.client import create_client, Client  # FIXED import
+
+print("Scraper started...")
 
 # ─────────── CREDENTIALS ───────────
 SUPABASE_URL = os.environ["SUPABASE_URL"]
 SUPABASE_KEY = os.environ["SUPABASE_KEY"]
+print("Connecting to Supabase...")
 supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 
 HOT_WORDS = ["motivated", "cash", "as-is", "urgent", "must sell", "investor", "fast", "cheap"]
@@ -22,11 +25,13 @@ def get_existing_titles() -> set[str]:
     try:
         resp = supabase.table("craigslist_leads").select("title").limit(1000).execute()
         return {row["title"] for row in resp.data}
-    except:
+    except Exception as e:
+        print("Error getting existing titles:", e)
         return set()
 
 def fetch_and_store(region: str = "dallas") -> list[dict]:
     url = f"https://{region}.craigslist.org/search/rea?hasPic=1"
+    print(f"Fetching from {url}")
     resp = requests.get(url, timeout=10)
     resp.raise_for_status()
 
@@ -55,10 +60,21 @@ def fetch_and_store(region: str = "dallas") -> list[dict]:
         }
         all_leads.append(lead)
 
-    # only insert the brand-new ones
+    print(f"Total leads fetched: {len(all_leads)}")
+
     existing = get_existing_titles()
     to_insert = [l for l in all_leads if l["title"] not in existing]
+    print(f"New leads to insert: {len(to_insert)}")
+
     if to_insert:
-        supabase.table("craigslist_leads").insert(to_insert).execute()
+        try:
+            supabase.table("craigslist_leads").insert(to_insert).execute()
+            print("Inserted new leads to Supabase.")
+        except Exception as e:
+            print("Error inserting to Supabase:", e)
 
     return all_leads
+
+# Run it when the script is executed
+if __name__ == "__main__":
+    fetch_and_store()
