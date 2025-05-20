@@ -1,4 +1,5 @@
 import os
+import re
 import requests
 from bs4 import BeautifulSoup
 from datetime import datetime
@@ -19,6 +20,23 @@ def normalize_price(val):
         return int("".join(filter(str.isdigit, str(val)))) if val else None
     except:
         return None
+
+def extract_address_from_craigslist_post(url):
+    try:
+        res = requests.get(url, timeout=10, headers={"User-Agent": "Mozilla/5.0"})
+        soup = BeautifulSoup(res.text, "html.parser")
+        map_tag = soup.find("div", class_="mapaddress")
+        if map_tag:
+            return map_tag.text.strip()
+
+        text_body = soup.find("section", id="postingbody")
+        if text_body:
+            match = re.search(r"\d{2,5}\s+[^\n,]+", text_body.text)
+            if match:
+                return match.group(0).strip()
+    except Exception as e:
+        print(f"❌ Address extraction failed: {e}")
+    return None
 
 def insert_lead(data: dict):
     try:
@@ -48,8 +66,8 @@ try:
         link = title_tag["href"] if title_tag.has_attr("href") else None
         price_tag = row.select_one(".result-price")
         price = normalize_price(price_tag.text) if price_tag else None
-
         is_hot = any(word in title.lower() for word in HOT_WORDS)
+
         post = {
             "title": title,
             "date_posted": datetime.utcnow().isoformat(),
@@ -64,16 +82,22 @@ try:
             "street_view_url": None
         }
 
-        # 🧠 ARV Estimation from Redfin
-        try:
-            comps_data = estimate_arv_from_redfin("Dallas", "TX", "75201")
-            post["arv"] = comps_data.get("estimated_arv")
-            post["equity"] = (post["arv"] or 0) - (post["price"] or 0)
-            post["hot_lead"] = (post["equity"] / post["arv"] >= 0.25) if post["arv"] and post["equity"] else False
-            print(f"💰 ARV: {post['arv']}, Equity: {post['equity']}, Hot: {post['hot_lead']}")
-        except Exception as e:
-            print("ARV fetch failed:", e)
-
+        # 🏠 Extract Address + Estimate ARV
+        if link:
+            extracted_address = extract_address_from_craigslist_post(link)
+            if extracted_address:
+                print("📍 Address found:", extracted_address)
+                try:
+                    comps_data = estimate_arv_from_redfin(extracted_address)
+                    post["arv"] = comps_data.get("estimated_arv")
+                    post["equity"] = (post["arv"] or 0) - (post["price"] or 0)
+                    post["hot_lead"] = (post["equity"] / post["arv"] >= 0.25) if post["arv"] and post["equity"] else False
+                    print(f"💰 ARV: {post['arv']}, Equity: {post['equity']}, Hot: {post['hot_lead']}")
+                except Exception as e:
+                    print("❌ ARV fetch failed:", e)
+            else:
+                print("⚠️ No address found.")
+        
         insert_lead(post)
 
 except Exception as e:
