@@ -6,12 +6,10 @@ import altair as alt
 import pydeck as pdk
 from supabase import create_client
 
-# ───── Supabase Setup ─────
 SUPABASE_URL = "https://pwkbszsljlpxhlfcvder.supabase.co"
 SUPABASE_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InB3a2JzenNsamxweGhsZmN2ZGVyIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NDQzNDk4MDEsImV4cCI6MjA1OTkyNTgwMX0.bjVMzL4X6dN6xBx8tV3lT7XPsOFIEqMLv0pG3y6N-4o"
 supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
 
-# ───── Branding ─────
 def _get_base64(image_path: str) -> str:
     with open(image_path, "rb") as img_file:
         return base64.b64encode(img_file.read()).decode()
@@ -31,56 +29,46 @@ st.markdown(
         z-index: 99999 !important; background: black !important; border-radius: 0 !important;
       }}
       [data-testid="stSidebar"] {{ background-color: #000 !important; }}
-      [data-testid="stDataFrame"],
-      [data-testid="stAltairChart"] {{
-        background-color: rgba(255, 255, 255, 0.2) !important;
-        backdrop-filter: blur(4px);
-        border: none !important;
-        box-shadow: none !important;
-      }}
     </style>
     """, unsafe_allow_html=True,
 )
-st.markdown("""<style>.stButton>button { background-color: #0a84ff; color: #fff; }</style>""", unsafe_allow_html=True)
 
-# ───── Data Load ─────
 @st.cache_data(ttl=300)
 def get_data() -> pd.DataFrame:
     resp = supabase.table("craigslist_leads").select("*").order("date_posted", desc=True).execute()
-    return pd.DataFrame(resp.data)
+    df = pd.DataFrame(resp.data)
+    df["price"] = pd.to_numeric(df.get("price"), errors="coerce")
+    df["arv"] = pd.to_numeric(df.get("arv"), errors="coerce")
+    df["date_posted"] = pd.to_datetime(df.get("date_posted"), errors="coerce")
+    return df.dropna(subset=["title", "date_posted"], how="any")
 
-# ───── Sidebar Navigation ─────
 st.sidebar.image("logo.png", width=48)
 st.sidebar.title("Savory Realty Investments")
 page = st.sidebar.radio("", ["Live Leads", "Leads Dashboard", "Upload PropStream", "Settings"])
 
-# ───── Live Leads Tab ─────
 if page == "Live Leads":
-    st.header("📥 Live Leads")
+    st.header("📬 Live Leads")
     df = get_data()
     if df.empty:
         st.warning("No leads found.")
         st.stop()
 
-    df["price"] = pd.to_numeric(df.get("price"), errors="coerce")
-    df["arv"] = pd.to_numeric(df.get("arv"), errors="coerce")
-    df["date_posted"] = pd.to_datetime(df.get("date_posted"), errors="coerce")
-    if "hot_lead" not in df.columns:
-        df["hot_lead"] = False
+    df["hot_lead"] = df.get("hot_lead", False)
     df["Hot"] = df["hot_lead"].apply(lambda x: "🔥" if x else "")
-
-    # Safe Google Maps link generation
-    if {"latitude", "longitude"}.issubset(df.columns):
-        df["Map"] = df["latitude"].combine(df["longitude"], lambda lat, lng: f"https://www.google.com/maps?q={lat},{lng}" if pd.notna(lat) and pd.notna(lng) else None)
+    if "latitude" in df.columns and "longitude" in df.columns:
+        df["Map"] = df.apply(
+            lambda row: f"https://www.google.com/maps?q={row['latitude']},{row['longitude']}"
+            if pd.notna(row.get("latitude")) and pd.notna(row.get("longitude"))
+            else None,
+            axis=1,
+        )
     else:
         df["Map"] = None
-
     df["Street View"] = df.get("street_view_url")
 
-    columns_to_show = [col for col in ["date_posted", "source", "title", "price", "arv", "Hot", "Map", "Street View"] if col in df.columns]
-    st.dataframe(df[columns_to_show], use_container_width=True)
+    col_subset = [col for col in ["date_posted", "source", "title", "price", "arv", "Hot", "Map", "Street View"] if col in df.columns]
+    st.dataframe(df[col_subset], use_container_width=True)
 
-# ───── Dashboard Tab ─────
 elif page == "Leads Dashboard":
     st.header("📊 Leads Dashboard")
     df = get_data()
@@ -88,34 +76,32 @@ elif page == "Leads Dashboard":
         st.warning("No data available.")
         st.stop()
 
-    df["price"] = pd.to_numeric(df["price"], errors="coerce")
-    df["date_posted"] = pd.to_datetime(df["date_posted"], errors="coerce")
-    df["arv"] = pd.to_numeric(df.get("arv", df["price"] * 1.35), errors="coerce")
     df["equity"] = df["arv"] - df["price"]
     df["hot_lead"] = df["equity"] / df["arv"] >= 0.25
 
     c1, c2, c3, c4 = st.columns(4)
     c1.metric("Total Leads", len(df))
-    c2.metric("Avg. Price", f"${df['price'].mean():,.0f}")
-    c3.metric("Avg. ARV", f"${df['arv'].mean():,.0f}")
+    c2.metric("Avg. Price", f"${df['price'].mean():,.0f}" if not df['price'].isna().all() else "N/A")
+    c3.metric("Avg. ARV", f"${df['arv'].mean():,.0f}" if not df['arv'].isna().all() else "N/A")
     c4.metric("Hot Leads", int(df["hot_lead"].sum()))
 
     if st.checkbox("Show raw preview"):
         st.dataframe(df.head(10))
 
     df_filtered = df.dropna(subset=["price", "arv", "date_posted"])
-    chart = (
-        alt.Chart(df_filtered)
-        .mark_line(point=True, strokeWidth=3)
-        .encode(
-            x=alt.X("date_posted:T", title="Date Posted"),
-            y=alt.Y("price:Q", title="Price (USD)"),
-            color=alt.condition("datum.hot_lead == true", alt.value("red"), alt.value("green")),
-            tooltip=["title", "price", "date_posted", "arv", "equity", "hot_lead"]
+    if not df_filtered.empty:
+        chart = (
+            alt.Chart(df_filtered)
+            .mark_line(point=True, strokeWidth=3)
+            .encode(
+                x=alt.X("date_posted:T", title="Date Posted"),
+                y=alt.Y("price:Q", title="Price (USD)"),
+                color=alt.condition("datum.hot_lead == true", alt.value("red"), alt.value("green")),
+                tooltip=["title", "price", "date_posted", "arv", "equity", "hot_lead"]
+            )
+            .properties(height=350, width=800)
         )
-        .properties(height=350, width=800)
-    )
-    st.altair_chart(chart, use_container_width=True)
+        st.altair_chart(chart, use_container_width=True)
 
     if {"latitude", "longitude"}.issubset(df.columns):
         df_map = df.dropna(subset=["latitude", "longitude"])
@@ -134,7 +120,6 @@ elif page == "Leads Dashboard":
         )
         st.pydeck_chart(pdk.Deck(initial_view_state=view, layers=[layer]))
 
-# ───── PropStream Upload Tab ─────
 elif page == "Upload PropStream":
     st.header("📤 Upload PropStream Leads")
     uploaded_file = st.file_uploader("Upload a CSV file from PropStream", type="csv")
@@ -158,7 +143,6 @@ elif page == "Upload PropStream":
                 supabase.table("craigslist_leads").upsert(row).execute()
             st.success(f"✅ Uploaded {len(df_upload)} leads to Supabase.")
 
-# ───── Settings Tab ─────
 elif page == "Settings":
     st.header("Settings")
     st.write("Your Supabase table `craigslist_leads` should include:")
@@ -170,7 +154,6 @@ elif page == "Settings":
         - `link` (text unique)  
         - `price` (numeric)  
         - `fetched_at` (timestamptz default now())  
-        - plus any of: latitude, longitude, arv, equity, street_view_url, source
+        - plus any of: latitude, longitude, arv, equity, street_view_url
         """
     )
-    st.write("Update `scraper.py` to control what gets pulled from Zillow, Craigslist, and Facebook.")
