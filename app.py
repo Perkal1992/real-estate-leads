@@ -1,4 +1,3 @@
-
 import os
 import base64
 import streamlit as st
@@ -54,8 +53,9 @@ st.sidebar.image("logo.png", width=48)
 st.sidebar.title("Savory Realty Investments")
 page = st.sidebar.radio("", ["Live Leads", "Leads Dashboard", "Upload PropStream", "Settings"])
 
+# ───── Live Leads ─────
 if page == "Live Leads":
-    st.header("ð¥ Live Leads")
+    st.header("📡 Live Leads")
     df = get_data()
     if df.empty:
         st.warning("No leads found.")
@@ -66,14 +66,32 @@ if page == "Live Leads":
     df["date_posted"] = pd.to_datetime(df.get("date_posted"), errors="coerce")
     if "hot_lead" not in df.columns:
         df["hot_lead"] = False
-    df["Hot"] = df["hot_lead"].apply(lambda x: "ð¥" if x else "")
-    df["Map"] = df.get("latitude").combine(df.get("longitude"), lambda lat, lng: f"https://www.google.com/maps?q={lat},{lng}" if pd.notna(lat) and pd.notna(lng) else None)
+    df["Hot"] = df["hot_lead"].apply(lambda x: "🔥" if x else "")
+    df["Map"] = df.apply(
+        lambda r: f"https://www.google.com/maps?q={r.latitude},{r.longitude}"
+        if pd.notna(r.get("latitude")) and pd.notna(r.get("longitude"))
+        else None,
+        axis=1
+    )
     df["Street View"] = df.get("street_view_url")
 
-    st.dataframe(df[["date_posted", "source", "title", "price", "arv", "Hot", "Map", "Street View"]], use_container_width=True)
+    st.dataframe(
+        df[["date_posted", "source", "title", "price", "arv", "Hot", "Map", "Street View"]],
+        use_container_width=True
+    )
 
+    if {"latitude", "longitude"}.issubset(df.columns):
+        coords = df[["latitude", "longitude"]].dropna()
+        if not coords.empty:
+            coords = coords.rename(columns={"latitude": "lat", "longitude": "lon"})
+            st.subheader("📍 Lead Locations")
+            st.map(coords)
+        else:
+            st.info("No valid coordinates available to plot.")
+
+# ───── Leads Dashboard ─────
 elif page == "Leads Dashboard":
-    st.header("ð Leads Dashboard")
+    st.header("📊 Leads Dashboard")
     df = get_data()
     if df.empty:
         st.warning("No data available.")
@@ -125,14 +143,15 @@ elif page == "Leads Dashboard":
         )
         st.pydeck_chart(pdk.Deck(initial_view_state=view, layers=[layer]))
 
+# ───── Upload PropStream ─────
 elif page == "Upload PropStream":
-    st.header("ð¤ Upload PropStream Leads")
+    st.header("📤 Upload PropStream Leads")
     uploaded_file = st.file_uploader("Upload a CSV file from PropStream", type="csv")
     if uploaded_file:
         df_upload = pd.read_csv(uploaded_file)
         required_cols = {"Property Address", "City", "State", "Zip Code", "Amount Owed", "Estimated Value"}
         if not required_cols.issubset(df_upload.columns):
-            st.error("â Missing required PropStream columns.")
+            st.error("❌ Missing required PropStream columns.")
         else:
             df_upload = df_upload.rename(columns={
                 "Property Address": "address",
@@ -146,10 +165,11 @@ elif page == "Upload PropStream":
             df_upload["hot_lead"] = df_upload["equity"] / df_upload["arv"] >= 0.25
             for row in df_upload.to_dict(orient="records"):
                 supabase.table("craigslist_leads").upsert(row).execute()
-            st.success(f"â Uploaded {len(df_upload)} leads to Supabase.")
+            st.success(f"✅ Uploaded {len(df_upload)} leads to Supabase.")
 
+# ───── Settings ─────
 elif page == "Settings":
-    st.header("Settings")
+    st.header("⚙️ Settings")
     st.write("Your Supabase table `craigslist_leads` should include:")
     st.markdown(
         """
