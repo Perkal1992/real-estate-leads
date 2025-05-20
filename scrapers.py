@@ -1,4 +1,3 @@
-from redfin_comps import estimate_arv_from_redfin
 import os
 import requests
 from bs4 import BeautifulSoup
@@ -9,7 +8,6 @@ from redfin_comps import estimate_arv_from_redfin
 # ───── Supabase Setup ─────
 SUPABASE_URL   = os.getenv("SUPABASE_URL")
 SUPABASE_KEY   = os.getenv("SUPABASE_KEY")
-RAPIDAPI_KEY   = os.getenv("RAPIDAPI_KEY")
 supabase       = create_client(SUPABASE_URL, SUPABASE_KEY)
 
 print("🚀 Scraper started at", datetime.utcnow().isoformat())
@@ -47,18 +45,16 @@ try:
         title = title_tag.text.strip()
         if title in seen:
             continue
-
         link = title_tag["href"] if title_tag.has_attr("href") else None
         price_tag = row.select_one(".result-price")
         price = normalize_price(price_tag.text) if price_tag else None
-
-        # Estimate ARV using Redfin
-        arv_data = estimate_arv_from_redfin("Dallas", "Dallas", "75201")  # Static city/zip fallback
-        arv = arv_data.get("estimated_arv") if arv_data and "estimated_arv" in arv_data else None
-        equity = arv - price if arv and price else None
-        hot_lead = equity / arv >= 0.25 if equity and arv else False
-
         is_hot = any(word in title.lower() for word in HOT_WORDS)
+
+        arv_data = None
+        try:
+            arv_data = estimate_arv_from_redfin(title)
+        except Exception as e:
+            print("Redfin ARV error:", e)
 
         post = {
             "title": title,
@@ -66,14 +62,16 @@ try:
             "source": "craigslist",
             "price": price,
             "link": link,
-            "is_hot": is_hot or hot_lead,
+            "is_hot": is_hot,
             "latitude": None,
             "longitude": None,
-            "arv": arv,
-            "equity": equity,
+            "arv": arv_data.get("estimated_arv") if arv_data else None,
+            "equity": (arv_data["estimated_arv"] - price) if arv_data and price else None,
             "street_view_url": None
         }
+
         insert_lead(post)
+
 except Exception as e:
     print("❌ Craigslist scraping failed:", e)
 
