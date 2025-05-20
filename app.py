@@ -76,8 +76,10 @@ if page == "Live Leads":
     else:
         df["Map"] = None
     df["Street View"] = df.get("street_view_url")
+    df["Link"] = df.get("link").apply(lambda url: f"[View Post]({url})" if pd.notna(url) else "")
 
-    col_subset = [col for col in ["date_posted", "source", "title", "price", "arv", "Hot", "Map", "Street View"] if col in df.columns]
+    col_subset = [col for col in ["date_posted", "source", "title", "price", "arv", "Hot", "Map", "Street View", "Link"] if col in df.columns]
+    st.markdown("### 📬 Live Craigslist Leads")
     st.dataframe(df[col_subset], use_container_width=True)
 
 # ───── Leads Dashboard Page ─────
