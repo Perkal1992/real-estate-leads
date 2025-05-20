@@ -125,7 +125,7 @@ elif page == "Leads Dashboard":
     )
     st.altair_chart(chart, use_container_width=True)
 
-    if {"latitude", "longitude"}.issubset(df.columns):
+        if {"latitude", "longitude"}.issubset(df.columns):
         df_map = df.dropna(subset=["latitude", "longitude"])
         st.subheader("Lead Locations")
         view = pdk.ViewState(
@@ -141,7 +141,6 @@ elif page == "Leads Dashboard":
             pickable=True,
         )
         st.pydeck_chart(pdk.Deck(initial_view_state=view, layers=[layer]))
-
 # ───── Upload PropStream ─────
 elif page == "Upload PropStream":
     st.header("📤 Upload PropStream Leads")
