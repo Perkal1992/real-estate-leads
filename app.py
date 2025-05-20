@@ -75,10 +75,9 @@ if page == "Live Leads":
     )
     df["Street View"] = df.get("street_view_url")
 
-    st.dataframe(
-        df[["date_posted", "source", "title", "price", "arv", "Hot", "Map", "Street View"]],
-        use_container_width=True
-    )
+    expected_cols = ["date_posted", "source", "title", "price", "arv", "Hot", "Map", "Street View"]
+available_cols = [col for col in expected_cols if col in df.columns]
+st.dataframe(df[available_cols], use_container_width=True)
 
     if {"latitude", "longitude"}.issubset(df.columns):
         coords = df[["latitude", "longitude"]].dropna()
