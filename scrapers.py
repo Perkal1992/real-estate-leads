@@ -1,3 +1,4 @@
+from redfin_comps import estimate_arv_from_redfin
 import os
 import requests
 from bs4 import BeautifulSoup
