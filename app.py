@@ -1,4 +1,3 @@
-
 import os
 import base64
 import streamlit as st
@@ -7,10 +6,12 @@ import altair as alt
 import pydeck as pdk
 from supabase import create_client
 
+# ───── Supabase Setup ─────
 SUPABASE_URL = "https://pwkbszsljlpxhlfcvder.supabase.co"
 SUPABASE_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InB3a2JzenNsamxweGhsZmN2ZGVyIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NDQzNDk4MDEsImV4cCI6MjA1OTkyNTgwMX0.bjVMzL4X6dN6xBx8tV3lT7XPsOFIEqMLv0pG3y6N-4o"
 supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
 
+# ───── Branding ─────
 def _get_base64(image_path: str) -> str:
     with open(image_path, "rb") as img_file:
         return base64.b64encode(img_file.read()).decode()
@@ -40,22 +41,22 @@ st.markdown(
     </style>
     """, unsafe_allow_html=True,
 )
-st.markdown(
-    """<style>.stButton>button { background-color: #0a84ff; color: #fff; }</style>""",
-    unsafe_allow_html=True,
-)
+st.markdown("""<style>.stButton>button { background-color: #0a84ff; color: #fff; }</style>""", unsafe_allow_html=True)
 
+# ───── Data Load ─────
 @st.cache_data(ttl=300)
 def get_data() -> pd.DataFrame:
     resp = supabase.table("craigslist_leads").select("*").order("date_posted", desc=True).execute()
     return pd.DataFrame(resp.data)
 
+# ───── Sidebar Navigation ─────
 st.sidebar.image("logo.png", width=48)
 st.sidebar.title("Savory Realty Investments")
 page = st.sidebar.radio("", ["Live Leads", "Leads Dashboard", "Upload PropStream", "Settings"])
 
+# ───── Live Leads Tab ─────
 if page == "Live Leads":
-    st.header("Ã°ÂÂÂ¥ Live Leads")
+    st.header("📥 Live Leads")
     df = get_data()
     if df.empty:
         st.warning("No leads found.")
@@ -66,19 +67,22 @@ if page == "Live Leads":
     df["date_posted"] = pd.to_datetime(df.get("date_posted"), errors="coerce")
     if "hot_lead" not in df.columns:
         df["hot_lead"] = False
-    df["Hot"] = df["hot_lead"].apply(lambda x: "Ã°ÂÂÂ¥" if x else "")
-    df["Map"] = df.get("latitude").combine(df.get("longitude"), lambda lat, lng: f"https://www.google.com/maps?q={lat},{lng}" if pd.notna(lat) and pd.notna(lng) else None)
+    df["Hot"] = df["hot_lead"].apply(lambda x: "🔥" if x else "")
+
+    # Safe Google Maps link generation
+    if {"latitude", "longitude"}.issubset(df.columns):
+        df["Map"] = df["latitude"].combine(df["longitude"], lambda lat, lng: f"https://www.google.com/maps?q={lat},{lng}" if pd.notna(lat) and pd.notna(lng) else None)
+    else:
+        df["Map"] = None
+
     df["Street View"] = df.get("street_view_url")
 
-    display_cols = ["date_posted", "title", "price", "arv", "Hot", "Map", "Street View"]
-    for col in display_cols:
-        if col not in df.columns:
-            df[col] = None
+    columns_to_show = [col for col in ["date_posted", "source", "title", "price", "arv", "Hot", "Map", "Street View"] if col in df.columns]
+    st.dataframe(df[columns_to_show], use_container_width=True)
 
-    st.dataframe(df[display_cols], use_container_width=True)
-
+# ───── Dashboard Tab ─────
 elif page == "Leads Dashboard":
-    st.header("Ã°ÂÂÂ Leads Dashboard")
+    st.header("📊 Leads Dashboard")
     df = get_data()
     if df.empty:
         st.warning("No data available.")
@@ -130,14 +134,15 @@ elif page == "Leads Dashboard":
         )
         st.pydeck_chart(pdk.Deck(initial_view_state=view, layers=[layer]))
 
+# ───── PropStream Upload Tab ─────
 elif page == "Upload PropStream":
-    st.header("Ã°ÂÂÂ¤ Upload PropStream Leads")
+    st.header("📤 Upload PropStream Leads")
     uploaded_file = st.file_uploader("Upload a CSV file from PropStream", type="csv")
     if uploaded_file:
         df_upload = pd.read_csv(uploaded_file)
         required_cols = {"Property Address", "City", "State", "Zip Code", "Amount Owed", "Estimated Value"}
         if not required_cols.issubset(df_upload.columns):
-            st.error("Missing required PropStream columns.")
+            st.error("❌ Missing required PropStream columns.")
         else:
             df_upload = df_upload.rename(columns={
                 "Property Address": "address",
@@ -151,18 +156,21 @@ elif page == "Upload PropStream":
             df_upload["hot_lead"] = df_upload["equity"] / df_upload["arv"] >= 0.25
             for row in df_upload.to_dict(orient="records"):
                 supabase.table("craigslist_leads").upsert(row).execute()
-            st.success(f"Uploaded {len(df_upload)} leads to Supabase.")
+            st.success(f"✅ Uploaded {len(df_upload)} leads to Supabase.")
 
+# ───── Settings Tab ─────
 elif page == "Settings":
     st.header("Settings")
     st.write("Your Supabase table `craigslist_leads` should include:")
-    st.markdown("""
-- `id` (uuid primary key)
-- `date_posted` (timestamptz)
-- `title` (text)
-- `link` (text unique)
-- `price` (numeric)
-- `fetched_at` (timestamptz default now())
-- plus any of: latitude, longitude, arv, equity, street_view_url
-""")
-    st.write("Update `scraper.py` to modify Craigslist/Zillow/Facebook lead ingestion.")
+    st.markdown(
+        """
+        - `id` (uuid primary key)  
+        - `date_posted` (timestamptz)  
+        - `title` (text)  
+        - `link` (text unique)  
+        - `price` (numeric)  
+        - `fetched_at` (timestamptz default now())  
+        - plus any of: latitude, longitude, arv, equity, street_view_url, source
+        """
+    )
+    st.write("Update `scraper.py` to control what gets pulled from Zillow, Craigslist, and Facebook.")
