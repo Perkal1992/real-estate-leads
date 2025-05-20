@@ -79,7 +79,7 @@ if page == "Upload PropStream":
             for row in df_upload.to_dict(orient="records"):
                 supabase.table("craigslist_leads").upsert(row).execute()
             st.success(f"✅ Uploaded {len(df_upload)} leads to Supabase.")
-
+page = st.sidebar.radio("", ["Live Leads", "Leads", "Dashboard", "Upload PropStream", "Settings"])
 # ─── Leads Dashboard ─────────────────────────────
 elif page == "Leads Dashboard":
     st.header("📊 Leads Dashboard")
@@ -150,3 +150,4 @@ elif page == "Settings":
         """
     )
     st.write("Update `scraper.py` to modify Craigslist/Zillow/Facebook lead ingestion.")
+    page = st.sidebar.radio("", ["Live Leads", "Leads", "Dashboard", "Upload PropStream", "Settings"])
