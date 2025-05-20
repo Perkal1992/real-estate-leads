@@ -6,10 +6,12 @@ import altair as alt
 import pydeck as pdk
 from supabase import create_client
 
+# ───── Supabase Credentials ─────
 SUPABASE_URL = "https://pwkbszsljlpxhlfcvder.supabase.co"
 SUPABASE_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InB3a2JzenNsamxweGhsZmN2ZGVyIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NDQzNDk4MDEsImV4cCI6MjA1OTkyNTgwMX0.bjVMzL4X6dN6xBx8tV3lT7XPsOFIEqMLv0pG3y6N-4o"
 supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
 
+# ───── Background Styling ─────
 def _get_base64(image_path: str) -> str:
     with open(image_path, "rb") as img_file:
         return base64.b64encode(img_file.read()).decode()
@@ -33,6 +35,7 @@ st.markdown(
     """, unsafe_allow_html=True,
 )
 
+# ───── Data Fetching ─────
 @st.cache_data(ttl=300)
 def get_data() -> pd.DataFrame:
     resp = supabase.table("craigslist_leads").select("*").order("date_posted", desc=True).execute()
@@ -42,17 +45,19 @@ def get_data() -> pd.DataFrame:
     df["date_posted"] = pd.to_datetime(df.get("date_posted"), errors="coerce")
     return df.dropna(subset=["title", "date_posted"], how="any")
 
+# ───── Sidebar Navigation ─────
 st.sidebar.image("logo.png", width=48)
 st.sidebar.title("Savory Realty Investments")
 page = st.sidebar.radio("", ["Live Leads", "Leads Dashboard", "Upload PropStream", "Settings"])
 
+# ───── Live Leads Page ─────
 if page == "Live Leads":
-    st.header("ð¬ Live Leads")
+    st.header("📬 Live Leads")
 
-    if st.button("ð Refresh List"):
+    if st.button("🔁 Refresh List"):
         with st.spinner("Scraping fresh leads..."):
             os.system("python3 scraper.py")
-        st.success("â Leads refreshed. Scroll down to view them.")
+        st.success("✅ Leads refreshed. Scroll down to view them.")
 
     df = get_data()
     if df.empty:
@@ -60,7 +65,7 @@ if page == "Live Leads":
         st.stop()
 
     df["hot_lead"] = df.get("hot_lead", False)
-    df["Hot"] = df["hot_lead"].apply(lambda x: "ð¥" if x else "")
+    df["Hot"] = df["hot_lead"].apply(lambda x: "🔥" if x else "")
     if "latitude" in df.columns and "longitude" in df.columns:
         df["Map"] = df.apply(
             lambda row: f"https://www.google.com/maps?q={row['latitude']},{row['longitude']}"
@@ -75,8 +80,9 @@ if page == "Live Leads":
     col_subset = [col for col in ["date_posted", "source", "title", "price", "arv", "Hot", "Map", "Street View"] if col in df.columns]
     st.dataframe(df[col_subset], use_container_width=True)
 
+# ───── Leads Dashboard Page ─────
 elif page == "Leads Dashboard":
-    st.header("ð Leads Dashboard")
+    st.header("📊 Leads Dashboard")
     df = get_data()
     if df.empty:
         st.warning("No data available.")
@@ -126,14 +132,15 @@ elif page == "Leads Dashboard":
         )
         st.pydeck_chart(pdk.Deck(initial_view_state=view, layers=[layer]))
 
+# ───── PropStream Upload Page ─────
 elif page == "Upload PropStream":
-    st.header("ð¤ Upload PropStream Leads")
+    st.header("📤 Upload PropStream Leads")
     uploaded_file = st.file_uploader("Upload a CSV file from PropStream", type="csv")
     if uploaded_file:
         df_upload = pd.read_csv(uploaded_file)
         required_cols = {"Property Address", "City", "State", "Zip Code", "Amount Owed", "Estimated Value"}
         if not required_cols.issubset(df_upload.columns):
-            st.error("â Missing required PropStream columns.")
+            st.error("❌ Missing required PropStream columns.")
         else:
             df_upload = df_upload.rename(columns={
                 "Property Address": "address",
@@ -147,8 +154,9 @@ elif page == "Upload PropStream":
             df_upload["hot_lead"] = df_upload["equity"] / df_upload["arv"] >= 0.25
             for row in df_upload.to_dict(orient="records"):
                 supabase.table("craigslist_leads").upsert(row).execute()
-            st.success(f"â Uploaded {len(df_upload)} leads to Supabase.")
+            st.success(f"✅ Uploaded {len(df_upload)} leads to Supabase.")
 
+# ───── Settings Page ─────
 elif page == "Settings":
     st.header("Settings")
     st.write("Your Supabase table `craigslist_leads` should include:")
