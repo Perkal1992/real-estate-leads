@@ -1,3 +1,4 @@
+
 import os
 import base64
 import streamlit as st
@@ -53,9 +54,8 @@ st.sidebar.image("logo.png", width=48)
 st.sidebar.title("Savory Realty Investments")
 page = st.sidebar.radio("", ["Live Leads", "Leads Dashboard", "Upload PropStream", "Settings"])
 
-# ───── Live Leads ─────
 if page == "Live Leads":
-    st.header("📡 Live Leads")
+    st.header("Ã°ÂÂÂ¥ Live Leads")
     df = get_data()
     if df.empty:
         st.warning("No leads found.")
@@ -66,31 +66,19 @@ if page == "Live Leads":
     df["date_posted"] = pd.to_datetime(df.get("date_posted"), errors="coerce")
     if "hot_lead" not in df.columns:
         df["hot_lead"] = False
-    df["Hot"] = df["hot_lead"].apply(lambda x: "🔥" if x else "")
-    df["Map"] = df.apply(
-        lambda r: f"https://www.google.com/maps?q={r.latitude},{r.longitude}"
-        if pd.notna(r.get("latitude")) and pd.notna(r.get("longitude"))
-        else None,
-        axis=1
-    )
+    df["Hot"] = df["hot_lead"].apply(lambda x: "Ã°ÂÂÂ¥" if x else "")
+    df["Map"] = df.get("latitude").combine(df.get("longitude"), lambda lat, lng: f"https://www.google.com/maps?q={lat},{lng}" if pd.notna(lat) and pd.notna(lng) else None)
     df["Street View"] = df.get("street_view_url")
 
-    expected_cols = ["date_posted", "source", "title", "price", "arv", "Hot", "Map", "Street View"]
-available_cols = [col for col in expected_cols if col in df.columns]
-st.dataframe(df[available_cols], use_container_width=True)
+    display_cols = ["date_posted", "title", "price", "arv", "Hot", "Map", "Street View"]
+    for col in display_cols:
+        if col not in df.columns:
+            df[col] = None
 
-    if {"latitude", "longitude"}.issubset(df.columns):
-        coords = df[["latitude", "longitude"]].dropna()
-        if not coords.empty:
-            coords = coords.rename(columns={"latitude": "lat", "longitude": "lon"})
-            st.subheader("📍 Lead Locations")
-            st.map(coords)
-        else:
-            st.info("No valid coordinates available to plot.")
+    st.dataframe(df[display_cols], use_container_width=True)
 
-# ───── Leads Dashboard ─────
 elif page == "Leads Dashboard":
-    st.header("📊 Leads Dashboard")
+    st.header("Ã°ÂÂÂ Leads Dashboard")
     df = get_data()
     if df.empty:
         st.warning("No data available.")
@@ -125,7 +113,7 @@ elif page == "Leads Dashboard":
     )
     st.altair_chart(chart, use_container_width=True)
 
-        if {"latitude", "longitude"}.issubset(df.columns):
+    if {"latitude", "longitude"}.issubset(df.columns):
         df_map = df.dropna(subset=["latitude", "longitude"])
         st.subheader("Lead Locations")
         view = pdk.ViewState(
@@ -141,15 +129,15 @@ elif page == "Leads Dashboard":
             pickable=True,
         )
         st.pydeck_chart(pdk.Deck(initial_view_state=view, layers=[layer]))
-# ───── Upload PropStream ─────
+
 elif page == "Upload PropStream":
-    st.header("📤 Upload PropStream Leads")
+    st.header("Ã°ÂÂÂ¤ Upload PropStream Leads")
     uploaded_file = st.file_uploader("Upload a CSV file from PropStream", type="csv")
     if uploaded_file:
         df_upload = pd.read_csv(uploaded_file)
         required_cols = {"Property Address", "City", "State", "Zip Code", "Amount Owed", "Estimated Value"}
         if not required_cols.issubset(df_upload.columns):
-            st.error("❌ Missing required PropStream columns.")
+            st.error("Missing required PropStream columns.")
         else:
             df_upload = df_upload.rename(columns={
                 "Property Address": "address",
@@ -163,21 +151,18 @@ elif page == "Upload PropStream":
             df_upload["hot_lead"] = df_upload["equity"] / df_upload["arv"] >= 0.25
             for row in df_upload.to_dict(orient="records"):
                 supabase.table("craigslist_leads").upsert(row).execute()
-            st.success(f"✅ Uploaded {len(df_upload)} leads to Supabase.")
+            st.success(f"Uploaded {len(df_upload)} leads to Supabase.")
 
-# ───── Settings ─────
 elif page == "Settings":
-    st.header("⚙️ Settings")
+    st.header("Settings")
     st.write("Your Supabase table `craigslist_leads` should include:")
-    st.markdown(
-        """
-        - `id` (uuid primary key)  
-        - `date_posted` (timestamptz)  
-        - `title` (text)  
-        - `link` (text unique)  
-        - `price` (numeric)  
-        - `fetched_at` (timestamptz default now())  
-        - plus any of: latitude, longitude, arv, equity, street_view_url
-        """
-    )
+    st.markdown("""
+- `id` (uuid primary key)
+- `date_posted` (timestamptz)
+- `title` (text)
+- `link` (text unique)
+- `price` (numeric)
+- `fetched_at` (timestamptz default now())
+- plus any of: latitude, longitude, arv, equity, street_view_url
+""")
     st.write("Update `scraper.py` to modify Craigslist/Zillow/Facebook lead ingestion.")
