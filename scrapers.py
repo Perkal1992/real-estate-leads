@@ -6,9 +6,9 @@ from supabase import create_client
 from redfin_comps import estimate_arv_from_redfin
 
 # ───── Supabase Setup ─────
-SUPABASE_URL   = os.getenv("SUPABASE_URL")
-SUPABASE_KEY   = os.getenv("SUPABASE_KEY")
-supabase       = create_client(SUPABASE_URL, SUPABASE_KEY)
+SUPABASE_URL = os.getenv("SUPABASE_URL")
+SUPABASE_KEY = os.getenv("SUPABASE_KEY")
+supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
 
 print("🚀 Scraper started at", datetime.utcnow().isoformat())
 
@@ -48,14 +48,8 @@ try:
         link = title_tag["href"] if title_tag.has_attr("href") else None
         price_tag = row.select_one(".result-price")
         price = normalize_price(price_tag.text) if price_tag else None
+
         is_hot = any(word in title.lower() for word in HOT_WORDS)
-
-        arv_data = None
-        try:
-            arv_data = estimate_arv_from_redfin(title)
-        except Exception as e:
-            print("Redfin ARV error:", e)
-
         post = {
             "title": title,
             "date_posted": datetime.utcnow().isoformat(),
@@ -65,10 +59,20 @@ try:
             "is_hot": is_hot,
             "latitude": None,
             "longitude": None,
-            "arv": arv_data.get("estimated_arv") if arv_data else None,
-            "equity": (arv_data["estimated_arv"] - price) if arv_data and price else None,
+            "arv": None,
+            "equity": None,
             "street_view_url": None
         }
+
+        # 🧠 ARV Estimation from Redfin
+        try:
+            comps_data = estimate_arv_from_redfin("Dallas", "TX", "75201")
+            post["arv"] = comps_data.get("estimated_arv")
+            post["equity"] = (post["arv"] or 0) - (post["price"] or 0)
+            post["hot_lead"] = (post["equity"] / post["arv"] >= 0.25) if post["arv"] and post["equity"] else False
+            print(f"💰 ARV: {post['arv']}, Equity: {post['equity']}, Hot: {post['hot_lead']}")
+        except Exception as e:
+            print("ARV fetch failed:", e)
 
         insert_lead(post)
 
