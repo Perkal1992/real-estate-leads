@@ -47,14 +47,20 @@ st.sidebar.title("Savory Realty Investments")
 page = st.sidebar.radio("", ["Live Leads", "Leads Dashboard", "Upload PropStream", "Settings"])
 
 if page == "Live Leads":
-    st.header("📬 Live Leads")
+    st.header("ð¬ Live Leads")
+
+    if st.button("ð Refresh List"):
+        with st.spinner("Scraping fresh leads..."):
+            os.system("python3 scraper.py")
+        st.success("â Leads refreshed. Scroll down to view them.")
+
     df = get_data()
     if df.empty:
         st.warning("No leads found.")
         st.stop()
 
     df["hot_lead"] = df.get("hot_lead", False)
-    df["Hot"] = df["hot_lead"].apply(lambda x: "🔥" if x else "")
+    df["Hot"] = df["hot_lead"].apply(lambda x: "ð¥" if x else "")
     if "latitude" in df.columns and "longitude" in df.columns:
         df["Map"] = df.apply(
             lambda row: f"https://www.google.com/maps?q={row['latitude']},{row['longitude']}"
@@ -70,7 +76,7 @@ if page == "Live Leads":
     st.dataframe(df[col_subset], use_container_width=True)
 
 elif page == "Leads Dashboard":
-    st.header("📊 Leads Dashboard")
+    st.header("ð Leads Dashboard")
     df = get_data()
     if df.empty:
         st.warning("No data available.")
@@ -121,13 +127,13 @@ elif page == "Leads Dashboard":
         st.pydeck_chart(pdk.Deck(initial_view_state=view, layers=[layer]))
 
 elif page == "Upload PropStream":
-    st.header("📤 Upload PropStream Leads")
+    st.header("ð¤ Upload PropStream Leads")
     uploaded_file = st.file_uploader("Upload a CSV file from PropStream", type="csv")
     if uploaded_file:
         df_upload = pd.read_csv(uploaded_file)
         required_cols = {"Property Address", "City", "State", "Zip Code", "Amount Owed", "Estimated Value"}
         if not required_cols.issubset(df_upload.columns):
-            st.error("❌ Missing required PropStream columns.")
+            st.error("â Missing required PropStream columns.")
         else:
             df_upload = df_upload.rename(columns={
                 "Property Address": "address",
@@ -141,7 +147,7 @@ elif page == "Upload PropStream":
             df_upload["hot_lead"] = df_upload["equity"] / df_upload["arv"] >= 0.25
             for row in df_upload.to_dict(orient="records"):
                 supabase.table("craigslist_leads").upsert(row).execute()
-            st.success(f"✅ Uploaded {len(df_upload)} leads to Supabase.")
+            st.success(f"â Uploaded {len(df_upload)} leads to Supabase.")
 
 elif page == "Settings":
     st.header("Settings")
