@@ -3,6 +3,7 @@ import requests
 from bs4 import BeautifulSoup
 from datetime import datetime
 from supabase import create_client
+from redfin_comps import estimate_arv_from_redfin
 
 # ───── Supabase Setup ─────
 SUPABASE_URL   = os.getenv("SUPABASE_URL")
@@ -45,22 +46,30 @@ try:
         title = title_tag.text.strip()
         if title in seen:
             continue
+
         link = title_tag["href"] if title_tag.has_attr("href") else None
         price_tag = row.select_one(".result-price")
         price = normalize_price(price_tag.text) if price_tag else None
 
+        # Estimate ARV using Redfin
+        arv_data = estimate_arv_from_redfin("Dallas", "Dallas", "75201")  # Static city/zip fallback
+        arv = arv_data.get("estimated_arv") if arv_data and "estimated_arv" in arv_data else None
+        equity = arv - price if arv and price else None
+        hot_lead = equity / arv >= 0.25 if equity and arv else False
+
         is_hot = any(word in title.lower() for word in HOT_WORDS)
+
         post = {
             "title": title,
             "date_posted": datetime.utcnow().isoformat(),
             "source": "craigslist",
             "price": price,
             "link": link,
-            "is_hot": is_hot,
+            "is_hot": is_hot or hot_lead,
             "latitude": None,
             "longitude": None,
-            "arv": None,
-            "equity": None,
+            "arv": arv,
+            "equity": equity,
             "street_view_url": None
         }
         insert_lead(post)
