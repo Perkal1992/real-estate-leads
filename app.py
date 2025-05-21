@@ -145,40 +145,66 @@ elif page == "PropStream Leads":
 # ───── Leads Dashboard ─────
 elif page == "Leads Dashboard":
     st.header("📊 Leads Dashboard")
-    source = st.sidebar.selectbox("Data Source:", ["Craigslist Leads","PropStream Leads"])
+    source = st.sidebar.selectbox("Data Source:", ["Craigslist Leads", "PropStream Leads"])
     if source == "Craigslist Leads":
         df = get_craigslist_data()
     else:
         df = get_propstream_data()
+
+    # Ensure `category` exists so we never KeyError
+    if "category" not in df.columns:
+        df["category"] = ""
+
+    # Only filter by category on PropStream data
     if source == "PropStream Leads":
         categories = sorted(df["category"].dropna().unique().tolist())
         chosen = st.sidebar.multiselect("Filter categories:", categories, default=categories)
         df = df[df["category"].isin(chosen)]
+
     if df.empty:
         st.warning("No data available.")
         st.stop()
+
+    # Compute metrics
     df["equity"] = df["arv"] - df["price"]
     df["hot_lead"] = df["equity"] / df["arv"] >= 0.25
-    c1,c2,c3,c4 = st.columns(4)
+
+    c1, c2, c3, c4 = st.columns(4)
     c1.metric("Total Leads", len(df))
     c2.metric("Avg. Price", f"${df['price'].mean():,.0f}" if not df['price'].isna().all() else "N/A")
     c3.metric("Avg. ARV", f"${df['arv'].mean():,.0f}" if not df['arv'].isna().all() else "N/A")
     c4.metric("Hot Leads", int(df["hot_lead"].sum()))
+
     if st.checkbox("Show raw preview"):
         st.dataframe(df.head(10), use_container_width=True)
-    df2 = df.dropna(subset=["price","arv","date_posted"])
+
+    # Time-series chart
+    df2 = df.dropna(subset=["price", "arv", "date_posted"])
     if not df2.empty:
-        chart = alt.Chart(df2).mark_line(point=True, strokeWidth=3).encode(
-            x=alt.X("date_posted:T", title="Date Posted"),
-            y=alt.Y("price:Q", title="Price (USD)"),
-            color=alt.condition("datum.hot_lead", alt.value("red"), alt.value("green")),
-            tooltip=["title","price","date_posted","arv","equity","category"]
-        ).properties(height=350, width=800)
+        chart = (
+            alt.Chart(df2)
+            .mark_line(point=True, strokeWidth=3)
+            .encode(
+                x=alt.X("date_posted:T", title="Date Posted"),
+                y=alt.Y("price:Q", title="Price (USD)"),
+                color=alt.condition("datum.hot_lead", alt.value("red"), alt.value("green")),
+                tooltip=["title","price","date_posted","arv","equity","category"],
+            )
+            .properties(height=350, width=800)
+        )
         st.altair_chart(chart, use_container_width=True)
-    if {"latitude","longitude"}.issubset(df.columns):
+
+    # Map view
+    if {"latitude", "longitude"}.issubset(df.columns):
         dfm = df.dropna(subset=["latitude","longitude"])
         view = pdk.ViewState(latitude=dfm.latitude.mean(), longitude=dfm.longitude.mean(), zoom=11)
-        layer = pdk.Layer("ScatterplotLayer", data=dfm, get_position=["longitude","latitude"], get_radius=100, pickable=True)
+        layer = pdk.Layer(
+            "ScatterplotLayer",
+            data=dfm,
+            get_position=["longitude","latitude"],
+            get_radius=100,
+            pickable=True,
+        )
         st.pydeck_chart(pdk.Deck(initial_view_state=view, layers=[layer]))
 
 # ───── Upload PropStream ─────
