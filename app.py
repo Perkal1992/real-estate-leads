@@ -52,7 +52,7 @@ st.markdown(css, unsafe_allow_html=True)
 # ───── Fetch Data ─────
 @st.cache_data(ttl=300)
 def get_craigslist_data() -> pd.DataFrame:
-    resp = (supabase.table("craigslist_leads").select("*").order("date_posted", desc=True).execute())
+    resp = supabase.table("craigslist_leads").select("*").order("date_posted", desc=True).execute()
     df = pd.DataFrame(resp.data or [])
     if df.empty:
         return df
@@ -65,7 +65,7 @@ def get_craigslist_data() -> pd.DataFrame:
 
 @st.cache_data(ttl=300)
 def get_propstream_data() -> pd.DataFrame:
-    resp = (supabase.table("propstream_leads").select("*").order("date_posted", desc=True).execute())
+    resp = supabase.table("propstream_leads").select("*").order("date_posted", desc=True).execute()
     df = pd.DataFrame(resp.data or [])
     if df.empty:
         return df
@@ -74,6 +74,8 @@ def get_propstream_data() -> pd.DataFrame:
         df[col] = pd.to_numeric(df.get(col), errors="coerce")
     if "title" not in df.columns:
         df["title"] = ""
+    if "category" not in df.columns:
+        df["category"] = ""
     return df.dropna(subset=["title", "date_posted"])
 
 # ───── Sidebar & Navigation ─────
@@ -128,7 +130,7 @@ elif page == "PropStream Leads":
         st.warning("No PropStream leads found.")
         st.stop()
     dfp["Hot"] = dfp.get("hot_lead", False).map({True: "🔥", False: ""})
-    st.dataframe(dfp[["id","date_posted","title","price","arv","Hot"]], use_container_width=True, height=500)
+    st.dataframe(dfp[["id","date_posted","title","price","arv","category","Hot"]], use_container_width=True, height=500)
     st.markdown("#### ⚠️ Delete PropStream Listings")
     ps_delete = st.multiselect("Select IDs to delete:", dfp["id"])
     if st.button("🗑️ Delete Selected PropStream") and ps_delete:
@@ -148,6 +150,10 @@ elif page == "Leads Dashboard":
         df = get_craigslist_data()
     else:
         df = get_propstream_data()
+    if source == "PropStream Leads":
+        categories = sorted(df["category"].dropna().unique().tolist())
+        chosen = st.sidebar.multiselect("Filter categories:", categories, default=categories)
+        df = df[df["category"].isin(chosen)]
     if df.empty:
         st.warning("No data available.")
         st.stop()
@@ -166,7 +172,7 @@ elif page == "Leads Dashboard":
             x=alt.X("date_posted:T", title="Date Posted"),
             y=alt.Y("price:Q", title="Price (USD)"),
             color=alt.condition("datum.hot_lead", alt.value("red"), alt.value("green")),
-            tooltip=["title","price","date_posted","arv","equity"],
+            tooltip=["title","price","date_posted","arv","equity","category"]
         ).properties(height=350, width=800)
         st.altair_chart(chart, use_container_width=True)
     if {"latitude","longitude"}.issubset(df.columns):
@@ -184,6 +190,11 @@ elif page == "Upload PropStream":
     ae = st.sidebar.checkbox("✉️ Send Email Alert", False)
     asms = st.sidebar.checkbox("📱 Send SMS Alert", False)
     st.sidebar.markdown("---")
+    # **New: Category selector**
+    category = st.sidebar.selectbox(
+        "What type of PropStream list is this?",
+        ["Pre-Foreclosure", "Fix & Flip", "Auction", "Tax Lien", "Other"],
+    )
     up = st.file_uploader("Choose your PropStream CSV", type=["csv"])
     if not up:
         st.info("Upload a CSV to unlock hot-lead insights.")
@@ -202,29 +213,32 @@ elif page == "Upload PropStream":
         dfc = dfc[dfc["zip"].astype(str).isin([z.strip() for z in zf.split(",")])]
     if cf:
         dfc = dfc[dfc["city"].str.lower() == cf.lower()]
-    # compute equity & hot lead
     dfc["equity"] = dfc["arv"] - dfc["price"]
     dfc["hot_lead"] = dfc["equity"] / dfc["arv"] >= 0.25
+    # tag category for each record
+    dfc["category"] = category
     dfc = dfc.replace([np.inf,-np.inf],np.nan)
     for rec in dfc.to_dict(orient="records"):
         rc = {k:(None if pd.isna(v) else v) for k,v in rec.items()}
         rc["title"] = rc.get("address")
         rc["link"] = rc.get("link","") or ""
         rc["date_posted"] = datetime.utcnow().isoformat()
+        rc["category"] = category
         supabase.table("propstream_leads").upsert(rc).execute()
     get_craigslist_data.clear()
+    get_propstream_data.clear()
     hot = int(dfc["hot_lead"].sum())
     total = len(dfc)
     st.success(f"✅ Uploaded {total} rows; {hot} 🔥 hot leads to PropStream table.")
     dfc2 = dfc.copy()
     for c in ("price","arv","equity"): dfc2[c] = dfc2[c].map(lambda x: f"${x:,.0f}" if pd.notna(x) else "")
     dfc2["hot_lead"] = dfc2["hot_lead"].map({True:"🔥",False:""})
-    cols = ["address","city","zip","price","arv","equity","hot_lead"]
+    display_cols = ["address","city","zip","price","arv","equity","hot_lead","category"]
     if im:
         dfc2["map_link"] = dfc.get("map_link")
         dfc2["street_view_link"] = dfc.get("street_view_link")
-        cols += ["map_link","street_view_link"]
-    st.dataframe(dfc2[cols],use_container_width=True,height=400)
+        display_cols += ["map_link","street_view_link"]
+    st.dataframe(dfc2[display_cols], use_container_width=True, height=400)
     if ae: st.write("✉️ Email sent!")
     if asms: st.write("📱 SMS sent!")
 
@@ -234,11 +248,11 @@ else:
     st.markdown("""
     • Your Supabase tables:
       - `craigslist_leads` for scraped live leads
-      - `propstream_leads` for your PropStream uploads
+      - `propstream_leads` for your PropStream uploads (with `category` column)
 
     • Table schema must include:
       - id (uuid PK), title, link, date_posted, fetched_at  
-      - price, arv, equity, hot_lead  
+      - price, arv, equity, hot_lead, category  
       - address, city, state, zip  
       - map_link, street_view_link  
       - latitude, longitude (optional)
