@@ -46,6 +46,22 @@ def get_propstream_data():
 
 st.set_page_config(page_title="Savory Realty Investments", page_icon="🏘️", layout="wide")
 
+def _get_base64(path: str) -> str:
+    with open(path, "rb") as f:
+        return base64.b64encode(f.read()).decode()
+
+bg_b64 = _get_base64("logo.png")
+st.markdown(f"""
+<style>
+[data-testid="stAppViewContainer"] {{
+  background-image: linear-gradient(rgba(0,0,0,0.6),rgba(0,0,0,0.6)), url("data:image/png;base64,{bg_b64}");
+  background-repeat: no-repeat;
+  background-position: center;
+  background-size: cover;
+}}
+</style>
+""", unsafe_allow_html=True)
+
 st.sidebar.image("logo.png", width=48)
 st.sidebar.title("Savory Realty Investments")
 page = st.sidebar.radio("", [
