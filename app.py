@@ -249,7 +249,7 @@ elif page == "Upload PropStream":
         rc["title"] = rc.get("address")
         rc["link"] = rc.get("link","") or ""
         rc["date_posted"] = datetime.utcnow().isoformat()
-        rc["category"] = category
+       rc["category"] = rc.get("category", category)
         supabase.table("propstream_leads").upsert(rc).execute()
     get_craigslist_data.clear()
     get_propstream_data.clear()
