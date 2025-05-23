@@ -1,3 +1,5 @@
+app.py 
+
 import os
 import base64
 from datetime import datetime
@@ -146,7 +148,6 @@ page = st.sidebar.radio(
 # ---------------------------------
 # Live Leads Page
 # ---------------------------------
-
 if page == "Live Leads":
     st.header("📬 Live Leads")
     df = get_craigslist_data()
@@ -196,7 +197,6 @@ if page == "Live Leads":
 # ---------------------------------
 # PropStream Leads Page
 # ---------------------------------
-
 elif page == "PropStream Leads":
     st.header("📥 PropStream Leads")
     df = get_propstream_data()
@@ -230,7 +230,6 @@ elif page == "PropStream Leads":
 # ---------------------------------
 # Leads Dashboard
 # ---------------------------------
-
 elif page == "Leads Dashboard":
     st.header("📊 Leads Dashboard")
     show_cr = st.sidebar.checkbox("Show Craigslist Leads", value=False)
@@ -305,7 +304,143 @@ elif page == "Leads Dashboard":
 # ---------------------------------
 # Upload Leads
 # ---------------------------------
-
 elif page == "Upload Leads":
     st.header("📤 Upload PropStream Leads")
-    zf = st.sidebar.text_input("ZIP filter:
+    zf = st.sidebar.text_input("ZIP filter:", "")
+    cf = st.sidebar.text_input("City filter:", "")
+    im = st.sidebar.checkbox("🔗 Map & Street View", False)
+    ae = st.sidebar.checkbox("✉️ Email Alert", False)
+    asms = st.sidebar.checkbox("📱 SMS Alert", False)
+    file = st.file_uploader("CSV", type=["csv"])
+
+    if file:
+        dfc = pd.read_csv(file)
+        dfc.rename(
+            columns={
+                "Property Address": "address",
+                "City": "city",
+                "State": "state",
+                "Zip Code": "zip",
+                "Amount Owed": "price",
+                "Estimated Value": "arv",
+            },
+            inplace=True,
+        )
+
+        # Sanitize numeric columns
+        dfc = dfc.replace([np.inf, -np.inf], np.nan)
+        dfc["arv"] = pd.to_numeric(dfc.get("arv"), errors="coerce").fillna(0)
+        dfc["price"] = pd.to_numeric(dfc.get("price"), errors="coerce").fillna(0)
+
+        # Apply filters
+        if zf:
+            dfc = dfc[dfc["zip"].astype(str).isin(zf.split(","))]
+        if cf:
+            dfc = dfc[dfc["city"].str.lower() == cf.lower()]
+
+        # Compute equity and hot flag
+        dfc["equity"] = dfc["arv"] - dfc["price"]
+        dfc["hot_lead"] = (dfc["equity"] / dfc["arv"].replace({0: np.nan})) >= 0.25
+        dfc["hot_lead"] = dfc["hot_lead"].fillna(False)
+
+        # Clean and upsert records
+        raw_records = dfc.to_dict("records")
+        clean_records = []
+        for rec in raw_records:
+            cleaned = {}
+            for key, val in rec.items():
+                if isinstance(val, (np.generic,)):
+                    cleaned[key] = val.item()
+                else:
+                    cleaned[key] = val
+                if isinstance(cleaned[key], float) and (np.isnan(cleaned[key]) or np.isinf(cleaned[key])):
+                    cleaned[key] = None
+            clean_records.append(cleaned)
+
+        for i in range(0, len(clean_records), 1000):
+            supabase.table("propstream_leads").upsert(clean_records[i:i+1000]).execute()
+
+        st.success(f"Uploaded {len(clean_records)} leads; {int(dfc['hot_lead'].sum())} hot.")
+
+        if im:
+            dfc["Map"] = dfc.apply(
+                lambda r: f"https://www.google.com/maps?q={r.latitude},{r.longitude}" if hasattr(r, "latitude") else None,
+                axis=1,
+            )
+            dfc["Street View"] = dfc.get("street_view_url", "")
+
+        st.dataframe(dfc.head(10), use_container_width=True)
+
+        if ae:
+            st.write("✉️ Email alert stub sent.")
+        if asms:
+            st.write("📱 SMS alert stub sent.")
+
+# ---------------------------------
+# Deal Tools & Status Tracker
+# ---------------------------------
+elif page == "Deal Tools":
+    st.header("🧮 Deal Tools & Contracts")
+    # Offer Calculator
+    st.subheader("🔢 Offer Calculator (MAO)")
+    arv_val = st.number_input("ARV", min_value=0.0, value=150000.0)
+    repairs_val = st.number_input("Repair Costs", min_value=0.0, value=30000.0)
+    offer_pct = st.slider("Offer % of ARV", 0.0, 1.0, 0.7)
+    mao = (arv_val * offer_pct) - repairs_val
+    st.metric("MAO", f"${mao:,.2f}")
+
+    # Assignment Contract Generator
+    st.subheader("📄 Real Estate Assignment Contract")
+    assignor = st.text_input("Assignor Name")
+    assignor_addr = st.text_input("Assignor Address")
+    assignee_name = st.text_input("Assignee Name")
+    assignee_addr = st.text_input("Assignee Address")
+    original_date = st.date_input("Original Agreement Date")
+    property_addr = st.text_input("Property Address")
+    effective_date = st.date_input("Effective Date", datetime.utcnow().date())
+    consideration_text = st.text_area(
+        "Consideration Description (Assignment Fee & Deposit):",
+        value="Assignment Fee of $XXXX and Good Faith Deposit of $XXXX."
+    )
+
+    if st.button("Generate Assignment Contract PDF") and FPDF:
+        pdf = FPDF()
+        pdf.add_page()
+        # Add logo at top
+        try:
+            pdf.image("logo.png", 10, 8, 33)
+        except Exception:
+            pass
+        pdf.ln(25)
+        pdf.set_font("Arial", "B", 14)
+        pdf.cell(0, 10, "REAL ESTATE ASSIGNMENT CONTRACT", ln=True, align="C")
+        pdf.ln(5)
+        pdf.set_font("Arial", size=12)
+        pdf.multi_cell(0, 6, f"1. ORIGINAL AGREEMENT: Assignor is party to that certain Purchase and Sale Agreement dated {original_date.strftime('%m/%d/%Y')} for the Property at {property_addr}.")
+        pdf.ln(4)
+        pdf.multi_cell(0, 6, f"2. ASSIGNMENT OF RIGHTS: Assignor assigns to Assignee all rights and obligations under the Original Agreement, effective {effective_date.strftime('%m/%d%/
+
+    # Lead Status Tracker
+    st.subheader("📌 Lead Status Tracker")
+    lead_id_input = st.text_input("Lead ID to update:")
+    new_status_option = st.selectbox("Update Status To:", ["New", "Contacted", "Warm", "Offer Sent", "Under Contract"])
+    if st.button("✅ Update Status"):
+        try:
+            supabase.table("propstream_leads").update({"status": new_status_option}).eq("id", lead_id_input).execute()
+            st.success(f"Lead {lead_id_input} set to {new_status_option}.")
+        except APIError as ex:
+            st.error(f"Could not update status: {ex}")
+
+    # Today's Offer Metrics
+    st.subheader("📊 Today's Offer Metrics")
+    offers_sent = 0  # Placeholder: Replace with real data source
+    st.write(f"Offers sent today: {offers_sent}")
+
+else:
+    st.header("Settings")
+    st.markdown(
+        """
+        • Supabase tables: craigslist_leads, propstream_leads  
+        • Required schema for PropStream: id, title, link, date_posted, price, arv, equity, hot_lead, category, address, city, state, zip, latitude, longitude
+        """
+    )
