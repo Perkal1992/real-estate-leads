@@ -251,7 +251,7 @@ elif page == "Deal Tools":
         pdf.multi_cell(0, 6, "3. Closing shall occur at a mutually agreed title company within 30 days of the effective date.")
         pdf.multi_cell(0, 6, "4. Buyer shall have a seven (7) day inspection period from the effective date to perform all desired inspections and due diligence and may terminate this agreement within such period if unsatisfied.")
         pdf.multi_cell(0, 6, "5. This agreement is contingent upon a satisfactory appraisal at or above the Purchase Price; if appraisal is lower, Buyer may renegotiate or terminate.")
-        pdf.multi_cell(0, 6, "6. Buyer’s attorney shall have a five (5) day review period from the effective date to review this agreement and renegotiate or terminate if necessary.")
+        pdf.multi_cell(0, 6, "6. Buyer's attorney shall have a five (5) day review period from the effective date to review this agreement and renegotiate or terminate if necessary.")
         pdf.multi_cell(0, 6, "7. Seller shall provide a complete property condition disclosure statement within three (3) days of the effective date.")
         pdf.multi_cell(0, 6, "8. Title to be insured by a licensed title company at closing; Seller to clear any title defects prior to closing.")
         pdf.multi_cell(0, 6, "9. All disputes under this agreement will be resolved by binding arbitration in the county where the Property is located.")
