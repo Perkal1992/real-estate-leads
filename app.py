@@ -6,7 +6,11 @@ import streamlit as st
 import pandas as pd
 import altair as alt
 import pydeck as pdk
-from fpdf import FPDF
+try:
+    from fpdf import FPDF
+except ImportError:
+    st.error("`fpdf` module not found. Please add `fpdf` to your `requirements.txt` and Redeploy.")
+    FPDF = None
 from io import BytesIO
 from supabase import create_client
 
@@ -224,7 +228,8 @@ elif page == "Deal Tools":
         pdf.ln(10)
         pdf.multi_cell(0,8,"This contract is subject to customary inspections and approvals.")
         buf = BytesIO()
-        pdf.output(buf)
+        pdf_bytes = pdf.output(dest='S').encode('latin-1')
+        buf = BytesIO(pdf_bytes)
         buf.seek(0)
         st.download_button("Download Contract PDF", data=buf, file_name="offer_contract.pdf", mime="application/pdf")
 
