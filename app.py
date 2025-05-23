@@ -57,7 +57,7 @@ st.markdown(f"""
   background-image: linear-gradient(rgba(0,0,0,0.6),rgba(0,0,0,0.6)), url("data:image/png;base64,{bg_b64}");
   background-repeat: no-repeat;
   background-position: center;
-  background-size: cover;
+  background-size: contain;
 }}
 </style>
 """, unsafe_allow_html=True)
