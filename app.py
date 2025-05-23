@@ -69,6 +69,7 @@ page = st.sidebar.radio("", [
     "PropStream Leads",
     "Leads Dashboard",
     "Upload PropStream",
+    "Deal Tools",
     "Settings",
 ])
 
