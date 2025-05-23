@@ -128,7 +128,8 @@ st.markdown(
 )
 
 # Sidebar navigation
-nst.image("logo.png", width=48)
+st.sidebar.image("logo.png", width=48)
+
 st.sidebar.title("Savory Realty Investments")
 page = st.sidebar.radio(
     "Navigate to:",
