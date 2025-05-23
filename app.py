@@ -211,3 +211,39 @@ else:
       - map_link, street_view_link
       - latitude, longitude (optional)
     """)
+    elif page == "Deal Tools":
+    st.header("🧮 Offer Calculator & Deal Tools")
+
+    # Offer Calculator
+    st.subheader("🔢 Offer Calculator (MAO)")
+    arv = st.number_input("After Repair Value (ARV)", value=150000)
+    repairs = st.number_input("Estimated Repairs", value=30000)
+    offer_percent = st.slider("Offer % of ARV", 0.5, 0.9, 0.7)
+
+    mao = round((arv * offer_percent) - repairs, 2)
+    st.success(f"💰 Maximum Allowable Offer (MAO): ${mao:,.2f}")
+
+    # PDF Generator Stub
+    st.subheader("📄 Generate Offer Contract (Coming Soon)")
+    seller_name = st.text_input("Seller Name")
+    property_address = st.text_input("Property Address")
+
+    if st.button("📄 Generate PDF Contract"):
+        st.info("🚧 PDF generation will be added next!")
+
+    # Status Tracker
+    st.subheader("📌 Lead Status Tracker")
+    lead_id = st.text_input("Lead ID")
+    new_status = st.selectbox("Update Status To", ["New", "Contacted", "Warm", "Offer Sent", "Under Contract"])
+
+    if st.button("✅ Update Status"):
+        if lead_id:
+            supabase.table("propstream_leads").update({"status": new_status}).eq("id", lead_id).execute()
+            st.success(f"Lead {lead_id} updated to: {new_status}")
+        else:
+            st.warning("Please enter a valid Lead ID")
+
+    # Offer Metrics
+    st.subheader("📊 Today's Summary (WIP)")
+    st.write("🛠 Live offer tracking will show total offers sent, accepted, and under contract.")
+
