@@ -377,10 +377,11 @@ elif page == "Upload Leads":
             st.write("📱 SMS alert stub sent.")
 
 # ---------------------------------
-# Deal Tools & Status Tracker
+# Deal Tools & Assignment Contract
 # ---------------------------------
 elif page == "Deal Tools":
     st.header("🧮 Deal Tools & Contracts")
+
     # Offer Calculator
     st.subheader("🔢 Offer Calculator (MAO)")
     arv_val = st.number_input("ARV", min_value=0.0, value=150000.0)
@@ -399,42 +400,76 @@ elif page == "Deal Tools":
     property_addr = st.text_input("Property Address")
     effective_date = st.date_input("Effective Date", datetime.utcnow().date())
     consideration_text = st.text_area(
-        "Consideration Description (Assignment Fee & Deposit):",
+        "Consideration & Deposit Details:",
         value="Assignment Fee of $XXXX and Good Faith Deposit of $XXXX."
     )
 
     if st.button("Generate Assignment Contract PDF") and FPDF:
         pdf = FPDF()
         pdf.add_page()
-        # Add logo at top
+        # insert logo
         try:
             pdf.image("logo.png", 10, 8, 33)
-        except Exception:
+        except:
             pass
         pdf.ln(25)
         pdf.set_font("Arial", "B", 14)
         pdf.cell(0, 10, "REAL ESTATE ASSIGNMENT CONTRACT", ln=True, align="C")
         pdf.ln(5)
         pdf.set_font("Arial", size=12)
-        pdf.multi_cell(0, 6, f"1. ORIGINAL AGREEMENT: Assignor is party to that certain Purchase and Sale Agreement dated {original_date.strftime('%m/%d/%Y')} for the Property at {property_addr}.")
-        pdf.ln(4)
-        pdf.multi_cell(0, 6, f"2. ASSIGNMENT OF RIGHTS: Assignor assigns to Assignee all rights and obligations under the Original Agreement, effective {effective_date.strftime('%m/%d%/
+        clauses = [
+            f"1. ORIGINAL AGREEMENT: Assignor is party to Purchase & Sale Agreement dated {original_date.strftime('%m/%d/%Y')} for {property_addr}.",
+            f"2. ASSIGNMENT: Assignor assigns all rights under the Original Agreement to Assignee, effective {effective_date.strftime('%m/%d/%Y')}.",
+            f"3. CONSIDERATION & DEPOSIT: {consideration_text}.",
+            "4. DUE DILIGENCE: Assignee may inspect title, HOA docs, and property. Deposit refundable until inspection period end.",
+            "5. CLOSING: Closing at agreed escrow/title agent no later than dates in Original Agreement.",
+            "6. REPRESENTATIONS & WARRANTIES: Parties have authority; Original Agreement is assignable.",
+            "7. COVENANTS & INDEMNIFICATION: Assignee assumes obligations and indemnifies Assignor for post-assignment liabilities.",
+            "8. DEFAULT & REMEDIES: On Assignee default, Assignor may retain deposit or seek specific performance.",
+            "9. NOTICES: Written notices to addresses above via certified mail or courier, effective upon receipt.",
+            "10. CONFIDENTIALITY: Terms and identities confidential except as required.",
+            "11. CHOICE OF LAW: Texas law governs; venue in Dallas County.",
+            "12. ENTIRE AGREEMENT: This Assignment and Original Agreement (and amendments) are the entire agreement.",
+            "13. SEVERABILITY: Invalid provisions do not affect remainder.",
+            "14. COUNTERPARTS & ELECTRONIC SIGNATURES: Binding in counterparts with electronic signatures."
+        ]
+        for clause in clauses:
+            pdf.multi_cell(0, 6, clause)
+            pdf.ln(2)
+        pdf.ln(10)
+        pdf.cell(0, 8, f"Assignor: ________________________    Date: {effective_date.strftime('%m/%d/%Y')}", ln=True)
+        pdf.cell(0, 8, f"Assignee: ________________________    Date: {effective_date.strftime('%m/%d/%Y')}", ln=True)
+        buffer = BytesIO(pdf.output(dest='S').encode('latin-1'))
+        buffer.seek(0)
+        st.download_button(
+            "Download Assignment Contract PDF",
+            data=buffer,
+            file_name="assignment_contract.pdf",
+            mime="application/pdf"
+        )
 
     # Lead Status Tracker
     st.subheader("📌 Lead Status Tracker")
     lead_id_input = st.text_input("Lead ID to update:")
-    new_status_option = st.selectbox("Update Status To:", ["New", "Contacted", "Warm", "Offer Sent", "Under Contract"])
+    new_status_option = st.selectbox(
+        "Update Status To:",
+        ["New", "Contacted", "Warm", "Offer Sent", "Under Contract"]
+    )
     if st.button("✅ Update Status"):
         try:
-            supabase.table("propstream_leads").update({"status": new_status_option}).eq("id", lead_id_input).execute()
+            supabase.table("propstream_leads") \
+                .update({"status": new_status_option}) \
+                .eq("id", lead_id_input) \
+                .execute()
             st.success(f"Lead {lead_id_input} set to {new_status_option}.")
         except APIError as ex:
             st.error(f"Could not update status: {ex}")
 
     # Today's Offer Metrics
     st.subheader("📊 Today's Offer Metrics")
-    offers_sent = 0  # Placeholder: Replace with real data source
+    offers_sent = 0  # Placeholder: replace with real data
     st.write(f"Offers sent today: {offers_sent}")
+
 
 else:
     st.header("Settings")
