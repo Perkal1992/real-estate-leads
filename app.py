@@ -179,14 +179,14 @@ elif page == "Upload PropStream":
     if cf:
         dfc = dfc[dfc["city"].str.lower() == cf.lower()]
     dfc["equity"] = dfc["arv"] - dfc["price"]
-    dfc["hot_lead"] = dfc["equity"] / dfc["arv"] >= 0.25
+    dfc["hot_lead"] = (dfc["equity"] / dfc["arv"] >= 0.25) & (dfc["arv"] >= 100000) & (dfc["equity"] >= 30000)
     dfc = dfc.replace([np.inf,-np.inf],np.nan)
     for rec in dfc.to_dict(orient="records"):
         rc = {k:(None if pd.isna(v) else v) for k,v in rec.items()}
         rc["title"] = rc.get("address")
         rc["link"] = rc.get("link","") or ""
         rc["date_posted"] = datetime.utcnow().isoformat()
-        rc["category"] = rc.get("category", category)
+        rc["category"] = rec.get("category", category)
         rc = {k: v for k, v in rc.items() if k in KNOWN_COLUMNS}
         supabase.table("propstream_leads").upsert(rc).execute()
     hot = int(dfc["hot_lead"].sum())
