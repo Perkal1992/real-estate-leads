@@ -7,11 +7,13 @@ import pandas as pd
 import altair as alt
 import pydeck as pdk
 from io import BytesIO
+
 try:
     from fpdf import FPDF
 except ImportError:
     st.error("`fpdf` module not found. Please add `fpdf` to your `requirements.txt` and redeploy.")
     FPDF = None
+
 from supabase import create_client
 
 # ───── Supabase Setup ─────
@@ -100,7 +102,8 @@ if page == "Live Leads":
         st.warning("No leads found.")
         st.stop()
     df["Hot"] = df.get("hot_lead", False).map({True: "🔥", False: ""})
-    df["Map"] = df.apply(lambda r: f"https://www.google.com/maps?q={r.latitude},{r.longitude}" if pd.notna(r.latitude) else None, axis=1)
+    df["Map"] = df.apply(lambda r: f"https://www.google.com/maps?q={r.latitude},{r.longitude}"
+                         if pd.notna(r.latitude) else None, axis=1)
     df["Street View"] = df.get("street_view_url", "")
     df["Link"] = df.get("link", "").map(lambda u: f"[View Post]({u})" if u else "")
     to_del = st.multiselect("Delete Craigslist IDs:", df["id"])
@@ -110,7 +113,8 @@ if page == "Live Leads":
     if st.button("🗑️ Delete ALL"):
         supabase.table("craigslist_leads").delete().neq("id", "").execute()
         st.success("Cleared all.")
-    st.dataframe(df[["id", "date_posted", "title", "price", "arv", "score", "motivation", "Hot", "Map", "Street View", "Link"]], use_container_width=True, height=500)
+    st.dataframe(df[["id", "date_posted", "title", "price", "arv", "score", "motivation", "Hot", "Map", "Street View", "Link"]],
+                 use_container_width=True, height=500)
 
 # ───── PropStream Leads ─────
 elif page == "PropStream Leads":
@@ -127,37 +131,77 @@ elif page == "PropStream Leads":
     if st.button("🧹 Delete ALL PropStream"):
         supabase.table("propstream_leads").delete().neq("id", "").execute()
         st.success("Cleared all.")
-    df["Map"] = df.apply(lambda r: f"https://www.google.com/maps?q={r.latitude},{r.longitude}" if pd.notna(r.latitude) else None, axis=1)
+    df["Map"] = df.apply(lambda r: f"https://www.google.com/maps?q={r.latitude},{r.longitude}"
+                         if pd.notna(r.latitude) else None, axis=1)
     df["Street View"] = df.get("street_view_url", "")
-    st.dataframe(df[["id", "date_posted", "title", "price", "arv", "category", "score", "motivation", "Hot", "Map", "Street View"]], use_container_width=True, height=500)
+    st.dataframe(df[["id", "date_posted", "title", "price", "arv", "category", "score", "motivation", "Hot", "Map", "Street View"]],
+                 use_container_width=True, height=500)
 
 # ───── Leads Dashboard ─────
 elif page == "Leads Dashboard":
     st.header("📊 Leads Dashboard")
-    df = get_propstream_data()
-    if df.empty:
-        st.warning("No data available.")
+
+    # toggles for source
+    show_cr = st.sidebar.checkbox("Show Craigslist Leads", value=False)
+    show_ps = st.sidebar.checkbox("Show PropStream Leads", value=True)
+
+    # pull in data based on toggles
+    dfs = []
+    if show_cr:
+        df_cr = get_craigslist_data()
+        df_cr["source"] = "Craigslist"
+        dfs.append(df_cr)
+    if show_ps:
+        df_ps = get_propstream_data()
+        df_ps["source"] = "PropStream"
+        dfs.append(df_ps)
+
+    if not dfs:
+        st.warning("Pick at least one source above.")
         st.stop()
+
+    df = pd.concat(dfs, ignore_index=True)
     df["equity"] = df["arv"] - df["price"]
     df["hot_lead"] = (df["equity"] / df["arv"] >= 0.25) & (df["arv"] >= 100000) & (df["equity"] >= 30000)
-    categories = sorted(df["category"].dropna().unique().tolist())
-    chosen = st.multiselect("Filter categories:", categories, default=categories)
-    df = df[df["category"].isin(chosen)]
+
+    # category filter only applies to PropStream
+    if "category" in df.columns:
+        ps_cats = sorted(df.loc[df["source"]=="PropStream", "category"].dropna().unique().tolist())
+        chosen = st.multiselect("Filter PropStream categories:", ps_cats, default=ps_cats)
+        df = df[~((df["source"]=="PropStream") & (~df["category"].isin(chosen)))]
+
+    # top metrics
     c1, c2, c3, c4 = st.columns(4)
     c1.metric("Total Leads", len(df))
     c2.metric("Avg Price", f"${df['price'].mean():,.0f}")
     c3.metric("Avg ARV", f"${df['arv'].mean():,.0f}")
     c4.metric("Hot Leads", int(df['hot_lead'].sum()))
-    if st.checkbox("Show chart"):
+
+    # optional line chart
+    if st.checkbox("Show Price over Time chart"):
         chart = alt.Chart(df).mark_line(point=True).encode(
-            x="date_posted:T", y="price:Q",
-            color=alt.condition("datum.hot_lead", alt.value("red"), alt.value("green"))
+            x="date_posted:T",
+            y="price:Q",
+            color="source:N",
+            tooltip=["source","title","price","arv","equity"]
         ).properties(width=800)
         st.altair_chart(chart)
+
+    # map if coords exist
     if {"latitude", "longitude"}.issubset(df.columns):
-        dfm = df.dropna(subset=["latitude", "longitude"])
-        view = pdk.ViewState(latitude=dfm.latitude.mean(), longitude=dfm.longitude.mean(), zoom=11)
-        layer = pdk.Layer("ScatterplotLayer", data=dfm, get_position=["longitude","latitude"], radiusScale=10)
+        dfm = df.dropna(subset=["latitude","longitude"])
+        view = pdk.ViewState(
+            latitude=dfm.latitude.mean(),
+            longitude=dfm.longitude.mean(),
+            zoom=11
+        )
+        layer = pdk.Layer(
+            "ScatterplotLayer",
+            data=dfm,
+            get_position=["longitude","latitude"],
+            radiusScale=10,
+            get_fill_color="datum.source=='Craigslist' ? [255,0,0] : [0,128,0]"
+        )
         st.pydeck_chart(pdk.Deck(initial_view_state=view, layers=[layer]))
 
 # ───── Upload Leads ─────
@@ -169,6 +213,7 @@ elif page == "Upload Leads":
     ae = st.sidebar.checkbox("✉️ Email Alert", False)
     asms = st.sidebar.checkbox("📱 SMS Alert", False)
     file = st.file_uploader("CSV", type=["csv"])
+
     if file:
         dfc = pd.read_csv(file)
         dfc.rename(columns={
@@ -179,24 +224,41 @@ elif page == "Upload Leads":
             "Amount Owed":"price",
             "Estimated Value":"arv"
         }, inplace=True)
+
+        # sanitize numeric columns
+        dfc = dfc.replace([np.inf, -np.inf], np.nan)
+        dfc = dfc.where(pd.notnull(dfc), None)
+
+        # apply filters
         if zf:
             dfc = dfc[dfc["zip"].astype(str).isin(zf.split(","))]
         if cf:
             dfc = dfc[dfc["city"].str.lower() == cf.lower()]
+
+        # compute equity & hot flag
         dfc["equity"] = dfc["arv"] - dfc["price"]
         dfc["hot_lead"] = dfc["equity"] / dfc["arv"] >= 0.25
+
+        # upsert in chunks
         records = dfc.to_dict("records")
         for i in range(0, len(records), 1000):
             supabase.table("propstream_leads").upsert(records[i:i+1000]).execute()
+
         st.success(f"Uploaded {len(records)} leads; {int(dfc['hot_lead'].sum())} hot.")
+
+        # preview and alerts
         if im:
-            dfc["Map"] = dfc.apply(lambda r: f"https://www.google.com/maps?q={r.latitude},{r.longitude}" if hasattr(r, 'latitude') else None, axis=1)
+            dfc["Map"] = dfc.apply(lambda r: f"https://www.google.com/maps?q={r.latitude},{r.longitude}"
+                                   if hasattr(r, 'latitude') else None, axis=1)
             dfc["Street View"] = dfc.get("street_view_url", "")
         st.dataframe(dfc.head(10), use_container_width=True)
+
         if ae:
             st.write("✉️ Email alert stub sent.")
         if asms:
             st.write("📱 SMS alert stub sent.")
+
+        # allow deletion of those just uploaded
         updf = get_propstream_data()
         del_ids = st.multiselect("Delete uploaded IDs:", updf["id"].tolist())
         if st.button("🗑️ Delete Selected PropStream") and del_ids:
@@ -206,6 +268,8 @@ elif page == "Upload Leads":
 # ───── Deal Tools ─────
 elif page == "Deal Tools":
     st.header("🧮 Deal Tools & Contracts")
+
+    # Offer Calculator
     st.subheader("🔢 Offer Calculator (MAO)")
     arv = st.number_input("ARV", min_value=0.0, value=150000.0)
     repairs = st.number_input("Repair Costs", min_value=0.0, value=30000.0)
@@ -213,6 +277,7 @@ elif page == "Deal Tools":
     mao = (arv * offer_pct) - repairs
     st.metric("MAO", f"${mao:,.2f}")
 
+    # Assignment Contract
     st.subheader("📄 Real Estate Assignment Contract")
     seller = st.text_input("Assignor Name")
     seller_addr = st.text_input("Assignor Address")
@@ -221,7 +286,8 @@ elif page == "Deal Tools":
     orig_date = st.date_input("Original Agreement Date")
     prop_addr = st.text_input("Property Address")
     effective_date = st.date_input("Effective Date", datetime.utcnow().date())
-    consideration = st.text_area("Consideration Description", value="Assignment Fee of $XXXX or other good and valuable consideration.")
+    consideration = st.text_area("Consideration Description",
+                                 value="Assignment Fee of $XXXX or other good and valuable consideration.")
     if st.button("Generate Assignment Contract PDF") and FPDF:
         pdf = FPDF()
         pdf.add_page()
@@ -229,17 +295,31 @@ elif page == "Deal Tools":
         pdf.cell(0, 10, "REAL ESTATE ASSIGNMENT CONTRACT", ln=True, align="C")
         pdf.ln(5)
         pdf.set_font("Arial", size=12)
-        pdf.multi_cell(0, 6, f"1. THE PARTIES. This Real Estate Assignment Contract (\"Assignment\") is entered into on {effective_date.strftime('%m/%d/%Y')} (\"Effective Date\"), by and between:\nAssignor: {seller} (\"Assignor\") with a mailing address of {seller_addr}; and Assignee: {assignee} (\"Assignee\") with a mailing address of {assignee_addr}.\nThe Parties are each referred to herein as a \"Party\" and collectively as the \"Parties.\"")
+        pdf.multi_cell(0, 6,
+            f"1. THE PARTIES. This Real Estate Assignment Contract (\"Assignment\") is entered "
+            f"into on {effective_date.strftime('%m/%d/%Y')} (\"Effective Date\"), by and between:\n"
+            f"Assignor: {seller} (\"Assignor\") with a mailing address of {seller_addr}; and "
+            f"Assignee: {assignee} (\"Assignee\") with a mailing address of {assignee_addr}."
+        )
         pdf.ln(2)
-        pdf.multi_cell(0, 6, f"2. ORIGINAL AGREEMENT. The Assignor is the purchasing party to that certain purchase and sale agreement, dated {orig_date.strftime('%m/%d/%Y')}, for the real property located at {prop_addr}, as more particularly described therein (\"Original Agreement\").")
+        pdf.multi_cell(0, 6,
+            f"2. ORIGINAL AGREEMENT. The Assignor is the purchasing party to that certain purchase and sale "
+            f"agreement, dated {orig_date.strftime('%m/%d/%Y')}, for the real property located at {prop_addr}, "
+            f"as more particularly described therein (\"Original Agreement\")."
+        )
         pdf.ln(2)
-        pdf.multi_cell(0, 6, "3. ASSIGNMENT. The Assignor hereby transfers all rights and obligations under the Original Agreement to the Assignee on the Effective Date, pursuant to its terms.")
+        pdf.multi_cell(0, 6, "3. ASSIGNMENT. The Assignor hereby transfers all rights and obligations under the "
+                             "Original Agreement to the Assignee on the Effective Date, pursuant to its terms.")
         pdf.ln(2)
-        pdf.multi_cell(0, 6, f"4. CONSIDERATION. For the sum of {consideration}, the receipt and sufficiency of which are acknowledged, the Parties agree to the terms set forth herein.")
+        pdf.multi_cell(0, 6, f"4. CONSIDERATION. For the sum of {consideration}, the receipt and sufficiency "
+                             "of which are acknowledged, the Parties agree to the terms set forth herein.")
         pdf.ln(2)
-        pdf.multi_cell(0, 6, "5. ASSUMPTION. By executing this Assignment, the Assignee accepts and assumes all liabilities, obligations, and claims under the Original Agreement.")
+        pdf.multi_cell(0, 6, "5. ASSUMPTION. By executing this Assignment, the Assignee accepts and assumes "
+                             "all liabilities, obligations, and claims under the Original Agreement.")
         pdf.ln(2)
-        pdf.multi_cell(0, 6, "6. REPRESENTATIONS. The Assignor warrants that the Original Agreement is valid, in full force, and assignable. Written consent of the selling party (if required) shall be attached.")
+        pdf.multi_cell(0, 6, "6. REPRESENTATIONS. The Assignor warrants that the Original Agreement is valid, "
+                             "in full force, and assignable. Written consent of the selling party (if required) "
+                             "shall be attached.")
         pdf.ln(2)
         for clause in [
             "7. Assignee shall indemnify and hold Assignor harmless from liabilities arising post-assignment.",
@@ -257,11 +337,13 @@ elif page == "Deal Tools":
         data = pdf.output(dest='S').encode('latin-1')
         buf = BytesIO(data)
         buf.seek(0)
-        st.download_button("📄 Download Assignment Contract", data=buf, file_name="assignment_contract.pdf", mime="application/pdf")
+        st.download_button("📄 Download Assignment Contract", data=buf,
+                           file_name="assignment_contract.pdf", mime="application/pdf")
 
+    # Lead Status Tracker
     st.subheader("📌 Lead Status Tracker")
     lid = st.text_input("Lead ID to update:")
-    new_status = st.selectbox("Update Status To:", ["New","Contacted","Warm","Offer Sent","Under Contract"])
+    new_status = st.selectbox("Update Status To:", ["New", "Contacted", "Warm", "Offer Sent", "Under Contract"])
     if st.button("✅ Update Status"):
         if lid:
             supabase.table("propstream_leads").update({"status": new_status}).eq("id", lid).execute()
@@ -269,6 +351,7 @@ elif page == "Deal Tools":
         else:
             st.warning("Enter a valid Lead ID.")
 
+    # Offer Metrics Summary
     st.subheader("📊 Today's Offer Metrics")
     offers_sent = 0
     st.write(f"Offers sent today: {offers_sent}")
