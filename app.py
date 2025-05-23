@@ -212,62 +212,62 @@ elif page == "Deal Tools":
     mao = (arv * offer_pct) - repairs
     st.metric("MAO", f"${mao:,.2f}")
 
-    # PDF Contract Generation (Enhanced)
-    st.subheader("📄 Generate Contract PDF")
-    seller = st.text_input("Seller Name")
-    buyer = st.text_input("Buyer Name", value="Savory Realty Investments")
+    # PDF Contract Generation (Assignment)
+    st.subheader("📄 Generate Assignment of Contract PDF")
+    seller = st.text_input("Original Seller Name")
+    assignor = st.text_input("Assignor Name", value="Savory Realty Investments")
+    assignee = st.text_input("Assignee Name")
     prop_addr = st.text_input("Property Address")
-    offer_price = st.number_input("Offer Price", value=round(mao,2))
-    earnest = st.number_input("Earnest Money Deposit", min_value=0.0, value=1000.0)
+    assignment_price = st.number_input("Assignment Fee", min_value=0.0, value=5000.0)
     closing_date = st.date_input("Closing Date", value=datetime.utcnow().date())
 
-    if st.button("Generate PDF Contract") and FPDF:
+    if st.button("Generate Assignment PDF") and FPDF:
         pdf = FPDF()
         pdf.add_page()
         # Add logo
         pdf.image("logo.png", x=10, y=8, w=30)
         # Title
         pdf.set_font("Arial", "B", 16)
-        pdf.cell(0, 10, "Real Estate Purchase Agreement", ln=True, align="C")
+        pdf.cell(0, 10, "Assignment of Contract Agreement", ln=True, align="C")
         pdf.ln(5)
         # Parties and details
         pdf.set_font("Arial", size=12)
         details = [
             ("Date", datetime.utcnow().date().strftime('%Y-%m-%d')),
-            ("Seller", seller),
-            ("Buyer", buyer),
+            ("Original Seller (Assignor)", seller),
+            ("Assignor", assignor),
+            ("Assignee", assignee),
             ("Property", prop_addr),
-            ("Purchase Price", f"${offer_price:,.2f}"),
-            ("Earnest Money Deposit", f"${earnest:,.2f}"),
+            ("Assignment Fee", f"${assignment_price:,.2f}"),
             ("Closing Date", closing_date.strftime('%Y-%m-%d'))
         ]
         for label, val in details:
-            pdf.cell(50, 8, f"{label}:", ln=False)
+            pdf.cell(60, 8, f"{label}:", ln=False)
             pdf.cell(0, 8, str(val), ln=True)
         pdf.ln(5)
-        # Standard Terms
-        pdf.multi_cell(0, 6, "1. The Seller agrees to sell and the Buyer agrees to buy the Property subject to inspections and approvals.")
-        pdf.multi_cell(0, 6, "2. This agreement is contingent upon financing contingency; Buyer must secure financing on terms acceptable to Buyer within the inspection period.")
-        pdf.multi_cell(0, 6, "3. Closing shall occur at a mutually agreed title company within 30 days of the effective date.")
-        pdf.multi_cell(0, 6, "4. Buyer shall have a seven (7) day inspection period from the effective date to perform all desired inspections and due diligence and may terminate this agreement within such period if unsatisfied.")
-        pdf.multi_cell(0, 6, "5. This agreement is contingent upon a satisfactory appraisal at or above the Purchase Price; if appraisal is lower, Buyer may renegotiate or terminate.")
-        pdf.multi_cell(0, 6, "6. Buyer's attorney shall have a five (5) day review period from the effective date to review this agreement and renegotiate or terminate if necessary.")
-        pdf.multi_cell(0, 6, "7. Seller shall provide a complete property condition disclosure statement within three (3) days of the effective date.")
-        pdf.multi_cell(0, 6, "8. Title to be insured by a licensed title company at closing; Seller to clear any title defects prior to closing.")
-        pdf.multi_cell(0, 6, "9. All disputes under this agreement will be resolved by binding arbitration in the county where the Property is located.")
-        pdf.multi_cell(0, 6, "10. If the Property was built before 1978, Buyer may conduct a lead-based paint risk assessment during the inspection period.")
+        # Assignment Terms
+        pdf.multi_cell(0, 6, "1. Assignor hereby assigns all rights and interests in the contract to purchase the Property to Assignee subject to the original purchase terms.")
+        pdf.multi_cell(0, 6, "2. Assignee agrees to assume all rights, responsibilities, and liabilities under the purchase contract.")
+        pdf.multi_cell(0, 6, "3. Assignee shall pay Assignor the Assignment Fee at closing of the purchase contract.")
+        pdf.multi_cell(0, 6, "4. All terms of the original purchase contract remain in full force and effect.")
+        pdf.multi_cell(0, 6, "5. This Assignment Agreement is governed by the laws of the state where the Property is located.")
+        pdf.multi_cell(0, 6, "6. Assignor represents and warrants that the original contract is in full force, free of undisclosed defaults, and assignable.")
+        pdf.multi_cell(0, 6, "7. Assignee shall indemnify and hold Assignor harmless from any liabilities or claims arising after assignment.")
+        pdf.multi_cell(0, 6, "8. This agreement may be terminated if the original purchase contract is terminated or voided.")
+        pdf.multi_cell(0, 6, "9. Neither party shall be liable for delays or failures due to causes beyond their reasonable control.")
+        pdf.multi_cell(0, 6, "10. Both parties acknowledge they have had the opportunity to consult legal counsel prior to signing.")
         pdf.ln(10)
         # Signature Lines
-        pdf.cell(90, 10, "Seller Signature: ____________________", ln=False)
-        pdf.cell(0, 10, "Buyer Signature: ____________________", ln=True)
+        pdf.cell(90, 10, "Assignor Signature: ____________________", ln=False)
+        pdf.cell(0, 10, "Assignee Signature: ____________________", ln=True)
         # Output
         pdf_bytes = pdf.output(dest='S').encode('latin-1')
         buf = BytesIO(pdf_bytes)
         buf.seek(0)
         st.download_button(
-            label="Download Purchase Agreement",
+            label="Download Assignment PDF",
             data=buf,
-            file_name="purchase_agreement.pdf",
+            file_name="assignment_agreement.pdf",
             mime="application/pdf"
         )
 
