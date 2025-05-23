@@ -211,27 +211,58 @@ elif page == "Deal Tools":
     offer_pct = st.slider("Offer % of ARV", 0.0, 1.0, 0.7)
     mao = (arv * offer_pct) - repairs
     st.metric("MAO", f"${mao:,.2f}")
-    # Contract PDF
+
+    # PDF Contract Generation (Enhanced)
     st.subheader("📄 Generate Contract PDF")
     seller = st.text_input("Seller Name")
+    buyer = st.text_input("Buyer Name", value="Savory Realty Investments")
     prop_addr = st.text_input("Property Address")
     offer_price = st.number_input("Offer Price", value=round(mao,2))
-    if st.button("Generate PDF Contract"):
+    earnest = st.number_input("Earnest Money Deposit", min_value=0.0, value=1000.0)
+    closing_date = st.date_input("Closing Date", value=datetime.utcnow().date())
+
+    if st.button("Generate PDF Contract") and FPDF:
         pdf = FPDF()
         pdf.add_page()
-        pdf.set_font("Arial","B",16)
-        pdf.cell(0,10,"Real Estate Purchase Contract",ln=True,align="C")
+        # Add logo
+        pdf.image("logo.png", x=10, y=8, w=30)
+        # Title
+        pdf.set_font("Arial", "B", 16)
+        pdf.cell(0, 10, "Real Estate Purchase Agreement", ln=True, align="C")
+        pdf.ln(5)
+        # Parties and details
+        pdf.set_font("Arial", size=12)
+        details = [
+            ("Date", datetime.utcnow().date().strftime('%Y-%m-%d')),
+            ("Seller", seller),
+            ("Buyer", buyer),
+            ("Property", prop_addr),
+            ("Purchase Price", f"${offer_price:,.2f}"),
+            ("Earnest Money Deposit", f"${earnest:,.2f}"),
+            ("Closing Date", closing_date.strftime('%Y-%m-%d'))
+        ]
+        for label, val in details:
+            pdf.cell(50, 8, f"{label}:", ln=False)
+            pdf.cell(0, 8, str(val), ln=True)
+        pdf.ln(5)
+        # Standard Terms
+        pdf.multi_cell(0, 6, "1. The Seller agrees to sell and the Buyer agrees to buy the Property subject to inspections and approvals.")
+        pdf.multi_cell(0, 6, "2. This agreement is contingent upon financing and no liens against the Property.")
+        pdf.multi_cell(0, 6, "3. Closing shall occur at a mutually agreed title company within 30 days.")
         pdf.ln(10)
-        pdf.set_font("Arial",size=12)
-        for label, val in [("Date", datetime.utcnow().date()), ("Seller", seller), ("Property", prop_addr), ("Offer Price", f"${offer_price:,.2f}")]:
-            pdf.multi_cell(0,8,f"{label}: {val}")
-        pdf.ln(10)
-        pdf.multi_cell(0,8,"This contract is subject to customary inspections and approvals.")
-        buf = BytesIO()
+        # Signature Lines
+        pdf.cell(90, 10, "Seller Signature: ____________________", ln=False)
+        pdf.cell(0, 10, "Buyer Signature: ____________________", ln=True)
+        # Output
         pdf_bytes = pdf.output(dest='S').encode('latin-1')
         buf = BytesIO(pdf_bytes)
         buf.seek(0)
-        st.download_button("Download Contract PDF", data=buf, file_name="offer_contract.pdf", mime="application/pdf")
+        st.download_button(
+            label="Download Purchase Agreement",
+            data=buf,
+            file_name="purchase_agreement.pdf",
+            mime="application/pdf"
+        )
 
 # ───── Settings ─────
 else:
