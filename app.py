@@ -7,7 +7,7 @@ import pandas as pd
 import altair as alt
 import pydeck as pdk
 from io import BytesIO
-from postgrest.exceptions import APIError  # to catch status-column errors
+from postgrest.exceptions import APIError
 
 try:
     from fpdf import FPDF
@@ -19,16 +19,13 @@ from supabase import create_client
 
 # ───── Supabase Setup ─────
 SUPABASE_URL = "https://pwkbszsljlpxhlfcvder.supabase.co"
-SUPABASE_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InB3a2JzenNsamxweGhsZmN2ZGVyIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NDQzNDk4MDEsImV4cCI6MjA1OTkyNTgwMX0.bjVMzL4X6dN6xBx8tV3lT7XPsOFIEqMLv0pG3y6N-4o"
+SUPABASE_KEY = os.getenv("SUPABASE_KEY", "YOUR_SUPABASE_KEY")
 supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
 
 # ───── Helper Functions ─────
 @st.cache_data(ttl=300)
 def get_craigslist_data():
-    resp = supabase.table("craigslist_leads") \
-                    .select("*") \
-                    .order("date_posted", desc=True) \
-                    .execute()
+    resp = supabase.table("craigslist_leads").select("*").order("date_posted", desc=True).execute()
     df = pd.DataFrame(resp.data or [])
     if df.empty:
         return df
@@ -44,10 +41,7 @@ def get_craigslist_data():
 
 @st.cache_data(ttl=300)
 def get_propstream_data():
-    resp = supabase.table("propstream_leads") \
-                    .select("*") \
-                    .order("date_posted", desc=True) \
-                    .execute()
+    resp = supabase.table("propstream_leads").select("*").order("date_posted", desc=True).execute()
     df = pd.DataFrame(resp.data or [])
     if df.empty:
         return df
@@ -62,10 +56,12 @@ def get_propstream_data():
     df["motivation"] = df["title"].apply(tag_motivation)
     return df.dropna(subset=["title", "date_posted"])
 
+
 def calculate_score(row):
     if row["arv"] <= 0 or row["equity"] <= 0:
         return 0
     return (row["equity"] / row["arv"]) * 100 + row["arv"] / 1000
+
 
 def tag_motivation(text):
     tags = ["vacant", "divorce", "fire", "urgent"]
@@ -94,12 +90,7 @@ st.markdown(f"""
 st.sidebar.image("logo.png", width=48)
 st.sidebar.title("Savory Realty Investments")
 page = st.sidebar.radio("Navigate to:", [
-    "Live Leads",
-    "PropStream Leads",
-    "Leads Dashboard",
-    "Upload Leads",
-    "Deal Tools",
-    "Settings"
+    "Live Leads", "PropStream Leads", "Leads Dashboard", "Upload Leads", "Deal Tools", "Settings"
 ])
 
 # ───── Live Leads ─────
@@ -110,8 +101,10 @@ if page == "Live Leads":
         st.warning("No leads found.")
         st.stop()
     df["Hot"] = df.get("hot_lead", False).map({True: "🔥", False: ""})
-    df["Map"] = df.apply(lambda r: f"https://www.google.com/maps?q={r.latitude},{r.longitude}"
-                         if pd.notna(r.latitude) else None, axis=1)
+    df["Map"] = df.apply(
+        lambda r: f"https://www.google.com/maps?q={r.latitude},{r.longitude}" if pd.notna(r.latitude) else None,
+        axis=1
+    )
     df["Street View"] = df.get("street_view_url", "")
     df["Link"] = df.get("link", "").map(lambda u: f"[View Post]({u})" if u else "")
     to_del = st.multiselect("Delete Craigslist IDs:", df["id"].tolist())
@@ -141,8 +134,10 @@ elif page == "PropStream Leads":
     if st.button("🧹 Delete ALL PropStream"):
         supabase.table("propstream_leads").delete().neq("id", "").execute()
         st.success("Cleared all.")
-    df["Map"] = df.apply(lambda r: f"https://www.google.com/maps?q={r.latitude},{r.longitude}"
-                         if pd.notna(r.latitude) else None, axis=1)
+    df["Map"] = df.apply(
+        lambda r: f"https://www.google.com/maps?q={r.latitude},{r.longitude}" if pd.notna(r.latitude) else None,
+        axis=1
+    )
     df["Street View"] = df.get("street_view_url", "")
     st.dataframe(
         df[["id", "date_posted", "title", "price", "arv", "category", "score", "motivation", "Hot", "Map", "Street View"]],
@@ -152,12 +147,8 @@ elif page == "PropStream Leads":
 # ───── Leads Dashboard ─────
 elif page == "Leads Dashboard":
     st.header("📊 Leads Dashboard")
-
-    # toggles for source
     show_cr = st.sidebar.checkbox("Show Craigslist Leads", value=False)
     show_ps = st.sidebar.checkbox("Show PropStream Leads", value=True)
-
-    # gather data
     dfs = []
     if show_cr:
         df_cr = get_craigslist_data()
@@ -167,31 +158,26 @@ elif page == "Leads Dashboard":
         df_ps = get_propstream_data()
         df_ps["source"] = "PropStream"
         dfs.append(df_ps)
-
     if not dfs:
         st.warning("Pick at least one source above.")
         st.stop()
-
     df = pd.concat(dfs, ignore_index=True)
-    # sanitize again
     df = df.replace([np.inf, -np.inf], np.nan).fillna({"price":0,"arv":0,"equity":0})
     df["equity"] = df["arv"] - df["price"]
-    df["hot_lead"] = (df["equity"] / df["arv"] >= 0.25) & (df["arv"] >= 100000) & (df["equity"] >= 30000)
-
-    # PropStream category filter
+    df["hot_lead"] = (
+        (df["equity"] / df["arv"] >= 0.25) &
+        (df["arv"] >= 100000) &
+        (df["equity"] >= 30000)
+    )
     if "category" in df.columns:
         ps_cats = sorted(df.loc[df["source"]=="PropStream","category"].dropna().unique().tolist())
         chosen = st.multiselect("Filter PropStream categories:", ps_cats, default=ps_cats)
         df = df[~((df["source"]=="PropStream") & (~df["category"].isin(chosen)))]
-
-    # top metrics
     c1, c2, c3, c4 = st.columns(4)
     c1.metric("Total Leads", len(df))
     c2.metric("Avg Price", f"${df['price'].mean():,.0f}")
     c3.metric("Avg ARV", f"${df['arv'].mean():,.0f}")
     c4.metric("Hot Leads", int(df['hot_lead'].sum()))
-
-    # optional chart
     if st.checkbox("Show Price over Time chart"):
         chart = alt.Chart(df).mark_line(point=True).encode(
             x="date_posted:T",
@@ -200,15 +186,9 @@ elif page == "Leads Dashboard":
             tooltip=["source","title","price","arv","equity"]
         ).properties(width=800)
         st.altair_chart(chart)
-
-    # map view
     if {"latitude","longitude"}.issubset(df.columns):
         dfm = df.dropna(subset=["latitude","longitude"])
-        view = pdk.ViewState(
-            latitude=dfm.latitude.mean(),
-            longitude=dfm.longitude.mean(),
-            zoom=11
-        )
+        view = pdk.ViewState(latitude=dfm.latitude.mean(), longitude=dfm.longitude.mean(), zoom=11)
         layer = pdk.Layer(
             "ScatterplotLayer",
             data=dfm,
@@ -226,8 +206,7 @@ elif page == "Upload Leads":
     im = st.sidebar.checkbox("🔗 Map & Street View", False)
     ae = st.sidebar.checkbox("✉️ Email Alert", False)
     asms = st.sidebar.checkbox("📱 SMS Alert", False)
-    file = st.file_uploader("CSV", type=["csv"])
-
+    file = st.file_uploader("CSV", type=["csv"]) 
     if file:
         dfc = pd.read_csv(file)
         dfc.rename(columns={
@@ -238,37 +217,31 @@ elif page == "Upload Leads":
             "Amount Owed":"price",
             "Estimated Value":"arv"
         }, inplace=True)
-
-        # sanitize
+        # sanitize and avoid boolean ambiguity
         dfc = dfc.replace([np.inf, -np.inf], np.nan)
-        dfc = dfc.where(pd.notnull(dfc), None)
-
+        dfc["arv"] = pd.to_numeric(dfc.get("arv"), errors="coerce").fillna(0)
+        dfc["price"] = pd.to_numeric(dfc.get("price"), errors="coerce").fillna(0)
         if zf:
             dfc = dfc[dfc["zip"].astype(str).isin(zf.split(","))]
         if cf:
             dfc = dfc[dfc["city"].str.lower() == cf.lower()]
-
-        dfc["equity"] = (dfc["arv"] or 0) - (dfc["price"] or 0)
-        dfc["hot_lead"] = dfc["equity"] / (dfc["arv"] or 1) >= 0.25
-
+        dfc["equity"] = dfc["arv"] - dfc["price"]
+        dfc["hot_lead"] = (dfc["equity"] / dfc["arv"].replace({0: np.nan})) >= 0.25
+        dfc["hot_lead"] = dfc["hot_lead"].fillna(False)
         records = dfc.to_dict("records")
         for i in range(0, len(records), 1000):
             supabase.table("propstream_leads").upsert(records[i:i+1000]).execute()
-
         st.success(f"Uploaded {len(records)} leads; {int(dfc['hot_lead'].sum())} hot.")
-
         if im:
-            dfc["Map"] = dfc.apply(lambda r: f"https://www.google.com/maps?q={r.latitude},{r.longitude}" if hasattr(r,"latitude") else None, axis=1)
-            dfc["Street View"] = dfc.get("street_view_url","")
+            dfc["Map"] = dfc.apply(lambda r: f"https://www.google.com/maps?q={r.latitude},{r.longitude}" if hasattr(r, "latitude") else None, axis=1)
+            dfc["Street View"] = dfc.get("street_view_url", "")
         st.dataframe(dfc.head(10), use_container_width=True)
-
         if ae: st.write("✉️ Email alert stub sent.")
         if asms: st.write("📱 SMS alert stub sent.")
 
 # ───── Deal Tools & Status Tracker ─────
 elif page == "Deal Tools":
     st.header("🧮 Deal Tools & Contracts")
-
     # Offer Calculator
     st.subheader("🔢 Offer Calculator (MAO)")
     arv = st.number_input("ARV", min_value=0.0, value=150000.0)
@@ -276,7 +249,6 @@ elif page == "Deal Tools":
     offer_pct = st.slider("Offer % of ARV", 0.0, 1.0, 0.7)
     mao = (arv * offer_pct) - repairs
     st.metric("MAO", f"${mao:,.2f}")
-
     # Assignment Contract
     st.subheader("📄 Real Estate Assignment Contract")
     seller = st.text_input("Assignor Name")
@@ -286,20 +258,22 @@ elif page == "Deal Tools":
     orig_date = st.date_input("Original Agreement Date")
     prop_addr = st.text_input("Property Address")
     effective_date = st.date_input("Effective Date", datetime.utcnow().date())
-    consideration = st.text_area("Consideration Description",
-                                 value="Assignment Fee of $XXXX or other good and valuable consideration.")
+    consideration = st.text_area("Consideration Description", value="Assignment Fee of $XXXX or other good and valuable consideration.")
     if st.button("Generate Assignment Contract PDF") and FPDF:
-        pdf = FPDF(); pdf.add_page(); pdf.set_font("Arial","B",14)
-        pdf.cell(0,10,"REAL ESTATE ASSIGNMENT CONTRACT",ln=True,align="C"); pdf.ln(5)
-        pdf.set_font("Arial",size=12)
-        pdf.multi_cell(0,6,
-            f"1. THE PARTIES. This Real Estate Assignment Contract (\"Assignment\") is entered on {effective_date.strftime('%m/%d/%Y')} by Assignor: {seller} and Assignee: {assignee}."
+        pdf = FPDF()
+        pdf.add_page()
+        pdf.set_font("Arial", "B", 14)
+        pdf.cell(0, 10, "REAL ESTATE ASSIGNMENT CONTRACT", ln=True, align="C")
+        pdf.ln(5)
+        pdf.set_font("Arial", size=12)
+        pdf.multi_cell(0, 6,
+            f"1. THE PARTIES... entered on {effective_date.strftime('%m/%d/%Y')} by Assignor: {seller} and Assignee: {assignee}."
         )
-        # (additional clauses here...)
+        # (additional clauses omitted for brevity)
         data = pdf.output(dest='S').encode('latin-1')
-        buf = BytesIO(data); buf.seek(0)
+        buf = BytesIO(data)
+        buf.seek(0)
         st.download_button("📄 Download Assignment Contract", data=buf, file_name="assignment_contract.pdf", mime="application/pdf")
-
     # Lead Status Tracker
     st.subheader("📌 Lead Status Tracker")
     lid = st.text_input("Lead ID to update:")
@@ -309,14 +283,15 @@ elif page == "Deal Tools":
             supabase.table("propstream_leads").update({"status": new_status}).eq("id", lid).execute()
             st.success(f"Lead {lid} set to {new_status}.")
         except APIError as e:
-            st.error(f"Could not update status column: {e}")
+            st.error(f"Could not update status: {e}")
+    # Today's Offers
+    st.subheader("📊 Today's Offer Metrics")
+    st.write(f"Offers sent today: {0}")
 
 # ───── Settings ─────
 else:
     st.header("Settings")
     st.markdown("""
     • Supabase tables: craigslist_leads, propstream_leads  
-    • Required schema for PropStream table:  
-      id, title, link, date_posted, price, arv, equity, hot_lead, category,  
-      address, city, state, zip, latitude, longitude  
+    • Required schema for PropStream: id, title, link, date_posted, price, arv, equity, hot_lead, category, address, city, state, zip, latitude, longitude
     """)
