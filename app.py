@@ -29,7 +29,6 @@ def get_craigslist_data():
     df = pd.DataFrame(resp.data or [])
     if df.empty:
         return df
-    # sanitize numeric columns
     df = df.replace([np.inf, -np.inf], np.nan)
     df["date_posted"] = pd.to_datetime(df.get("date_posted"), errors="coerce")
     for col in ("price", "arv", "equity"):
@@ -45,7 +44,6 @@ def get_propstream_data():
     df = pd.DataFrame(resp.data or [])
     if df.empty:
         return df
-    # sanitize numeric columns
     df = df.replace([np.inf, -np.inf], np.nan)
     df["date_posted"] = pd.to_datetime(df.get("date_posted"), errors="coerce")
     for col in ("price", "arv", "equity"):
@@ -206,7 +204,7 @@ elif page == "Upload Leads":
     im = st.sidebar.checkbox("🔗 Map & Street View", False)
     ae = st.sidebar.checkbox("✉️ Email Alert", False)
     asms = st.sidebar.checkbox("📱 SMS Alert", False)
-    file = st.file_uploader("CSV", type=["csv"]) 
+    file = st.file_uploader("CSV", type=["csv"])
     if file:
         dfc = pd.read_csv(file)
         dfc.rename(columns={
@@ -217,7 +215,7 @@ elif page == "Upload Leads":
             "Amount Owed":"price",
             "Estimated Value":"arv"
         }, inplace=True)
-        # sanitize and avoid boolean ambiguity
+        # sanitize numeric columns explicitly
         dfc = dfc.replace([np.inf, -np.inf], np.nan)
         dfc["arv"] = pd.to_numeric(dfc.get("arv"), errors="coerce").fillna(0)
         dfc["price"] = pd.to_numeric(dfc.get("price"), errors="coerce").fillna(0)
@@ -233,8 +231,8 @@ elif page == "Upload Leads":
             supabase.table("propstream_leads").upsert(records[i:i+1000]).execute()
         st.success(f"Uploaded {len(records)} leads; {int(dfc['hot_lead'].sum())} hot.")
         if im:
-            dfc["Map"] = dfc.apply(lambda r: f"https://www.google.com/maps?q={r.latitude},{r.longitude}" if hasattr(r, "latitude") else None, axis=1)
-            dfc["Street View"] = dfc.get("street_view_url", "")
+            dfc["Map"] = dfc.apply(lambda r: f"https://www.google.com/maps?q={r.latitude},{r.longitude}" if hasattr(r,"latitude") else None, axis=1)
+            dfc["Street View"] = dfc.get("street_view_url","")
         st.dataframe(dfc.head(10), use_container_width=True)
         if ae: st.write("✉️ Email alert stub sent.")
         if asms: st.write("📱 SMS alert stub sent.")
@@ -266,15 +264,35 @@ elif page == "Deal Tools":
         pdf.cell(0, 10, "REAL ESTATE ASSIGNMENT CONTRACT", ln=True, align="C")
         pdf.ln(5)
         pdf.set_font("Arial", size=12)
-        pdf.multi_cell(0, 6,
-            f"1. THE PARTIES... entered on {effective_date.strftime('%m/%d/%Y')} by Assignor: {seller} and Assignee: {assignee}."
-        )
-        # (additional clauses omitted for brevity)
+        pdf.multi_cell(0, 6, f"1. THE PARTIES. This Real Estate Assignment Contract (\"Assignment\") is entered into on {effective_date.strftime('%m/%d/%Y')} (\"Effective Date\"), by and between:\nAssignor: {seller} (\"Assignor\") with a mailing address of {seller_addr}; and Assignee: {assignee} (\"Assignee\") with a mailing address of {assignee_addr}.\nThe Parties are each referred to herein as a \"Party\" and collectively as the \"Parties\".")
+        pdf.ln(2)
+        pdf.multi_cell(0, 6, f"2. ORIGINAL AGREEMENT. The Assignor is the purchasing party to that certain purchase and sale agreement, dated {orig_date.strftime('%m/%d/%Y')}, for the real property located at {prop_addr}.")
+        pdf.ln(2)
+        pdf.multi_cell(0, 6, "3. ASSIGNMENT. The Assignor hereby transfers all rights and obligations under the Original Agreement to the Assignee on the Effective Date, pursuant to its terms.")
+        pdf.ln(2)
+        pdf.multi_cell(0, 6, f"4. CONSIDERATION. For the sum of {consideration}, the receipt and sufficiency of which are acknowledged, the Parties agree to the terms set forth herein.")
+        pdf.ln(2)
+        pdf.multi_cell(0, 6, "5. ASSUMPTION. By executing this Assignment, the Assignee accepts and assumes all liabilities, obligations, and claims under the Original Agreement.")
+        pdf.ln(2)
+        pdf.multi_cell(0, 6, "6. REPRESENTATIONS. The Assignor warrants that the Original Agreement is valid, in full force, and assignable. Written consent of the selling party (if required) shall be attached.")
+        pdf.ln(2)
+        for clause in [
+            "7. Assignee shall indemnify and hold Assignor harmless from liabilities arising post-assignment.",
+            "8. This Assignment terminates if the Original Agreement is terminated or voided.",
+            "9. Neither Party is liable for delays due to force majeure events.",
+            "10. Both Parties acknowledge the opportunity to consult legal counsel prior to signing."
+        ]:
+            pdf.multi_cell(0, 6, clause)
+        pdf.ln(10)
+        pdf.cell(0, 8, f"Assignor Signature: ___________________  Date: {effective_date.strftime('%m/%d/%Y')}", ln=True)
+        pdf.cell(0, 8, f"Print Name: {seller}", ln=True)
+        pdf.ln(5)
+        pdf.cell(0, 8, f"Assignee Signature: ___________________  Date: {effective_date.strftime('%m/%d/%Y')}", ln=True)
+        pdf.cell(0, 8, f"Print Name: {assignee}", ln=True)
         data = pdf.output(dest='S').encode('latin-1')
         buf = BytesIO(data)
         buf.seek(0)
         st.download_button("📄 Download Assignment Contract", data=buf, file_name="assignment_contract.pdf", mime="application/pdf")
-    # Lead Status Tracker
     st.subheader("📌 Lead Status Tracker")
     lid = st.text_input("Lead ID to update:")
     new_status = st.selectbox("Update Status To:", ["New", "Contacted", "Warm", "Offer Sent", "Under Contract"])
@@ -284,11 +302,9 @@ elif page == "Deal Tools":
             st.success(f"Lead {lid} set to {new_status}.")
         except APIError as e:
             st.error(f"Could not update status: {e}")
-    # Today's Offers
     st.subheader("📊 Today's Offer Metrics")
-    st.write(f"Offers sent today: {0}")
-
-# ───── Settings ─────
+    offers_sent = 0
+    st.write(f"Offers sent today: {offers_sent}")
 else:
     st.header("Settings")
     st.markdown("""
