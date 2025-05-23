@@ -1,6 +1,7 @@
 import os
 import base64
-from datetime import datetime\import numpy as np
+from datetime import datetime
+import numpy as np
 import streamlit as st
 import pandas as pd
 import altair as alt
@@ -15,7 +16,7 @@ from supabase import create_client
 
 # ───── Supabase Setup ─────
 SUPABASE_URL = "https://pwkbszsljlpxhlfcvder.supabase.co"
-SUPABASE_KEY = "YOUR_SUPABASE_KEY"
+SUPABASE_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InB3a2JzenNsamxweGhsZmN2ZGVyIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NDQzNDk4MDEsImV4cCI6MjA1OTkyNTgwMX0.bjVMzL4X6dN6xBx8tV3lT7XPsOFIEqMLv0pG3y6N-4o"
 supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
 
 # ───── Helper Functions ─────
@@ -26,8 +27,10 @@ def get_craigslist_data():
     if df.empty:
         return df
     df["date_posted"] = pd.to_datetime(df["date_posted"], errors="coerce")
-    for col in ("price", "arv", "equity"): df[col] = pd.to_numeric(df[col], errors="coerce")
-    if "title" not in df.columns: df["title"] = ""
+    for col in ("price", "arv", "equity"):
+        df[col] = pd.to_numeric(df[col], errors="coerce")
+    if "title" not in df.columns:
+        df["title"] = ""
     df["score"] = df.apply(calculate_score, axis=1)
     df["motivation"] = df["title"].apply(tag_motivation)
     return df.dropna(subset=["title", "date_posted"])
@@ -39,9 +42,12 @@ def get_propstream_data():
     if df.empty:
         return df
     df["date_posted"] = pd.to_datetime(df["date_posted"], errors="coerce")
-    for col in ("price", "arv", "equity"): df[col] = pd.to_numeric(df[col], errors="coerce")
-    if "title" not in df.columns: df["title"] = ""
-    if "category" not in df.columns: df["category"] = ""
+    for col in ("price", "arv", "equity"):
+        df[col] = pd.to_numeric(df[col], errors="coerce")
+    if "title" not in df.columns:
+        df["title"] = ""
+    if "category" not in df.columns:
+        df["category"] = ""
     df["score"] = df.apply(calculate_score, axis=1)
     df["motivation"] = df["title"].apply(tag_motivation)
     return df.dropna(subset=["title", "date_posted"])
@@ -49,7 +55,7 @@ def get_propstream_data():
 def calculate_score(row):
     if pd.isna(row.get('arv')) or pd.isna(row.get('equity')):
         return 0
-    return (row['equity'] / row['arv'])*100 + row['arv']/1000
+    return (row['equity'] / row['arv']) * 100 + row['arv'] / 1000
 
 def tag_motivation(text):
     tags = ["vacant", "divorce", "fire", "urgent"]
@@ -61,10 +67,11 @@ st.set_page_config(page_title="Savory Realty Investments", page_icon="🏘️", 
 def _get_base64(path):
     with open(path, "rb") as f:
         return base64.b64encode(f.read()).decode()
+
 bg = _get_base64("logo.png")
 st.markdown(f"""
 <style>
-[data-testid=\"stAppViewContainer\"] {{
+[data-testid="stAppViewContainer"] {{
   background-image: linear-gradient(rgba(0,0,0,0.6),rgba(0,0,0,0.6)), url('data:image/png;base64,{bg}');
   background-repeat: no-repeat;
   background-position: center;
@@ -113,7 +120,6 @@ elif page == "PropStream Leads":
         st.warning("No PropStream leads.")
         st.stop()
     df["Hot"] = df.get("hot_lead", False).map({True: "🔥", False: ""})
-    # Delete controls
     sel = st.multiselect("Delete PropStream IDs:", df["id"])
     if st.button("🗑️ Delete Selected PropStream") and sel:
         supabase.table("propstream_leads").delete().in_("id", sel).execute()
@@ -134,7 +140,6 @@ elif page == "Leads Dashboard":
         st.stop()
     df["equity"] = df["arv"] - df["price"]
     df["hot_lead"] = (df["equity"] / df["arv"] >= 0.25) & (df["arv"] >= 100000) & (df["equity"] >= 30000)
-    # Category filter
     categories = sorted(df["category"].dropna().unique().tolist())
     chosen = st.multiselect("Filter categories:", categories, default=categories)
     df = df[df["category"].isin(chosen)]
@@ -174,12 +179,13 @@ elif page == "Upload Leads":
             "Amount Owed":"price",
             "Estimated Value":"arv"
         }, inplace=True)
-        if zf: dfc = dfc[dfc["zip"].astype(str).isin(zf.split(","))]
-        if cf: dfc = dfc[dfc["city"].str.lower() == cf.lower()]
+        if zf:
+            dfc = dfc[dfc["zip"].astype(str).isin(zf.split(","))]
+        if cf:
+            dfc = dfc[dfc["city"].str.lower() == cf.lower()]
         dfc["equity"] = dfc["arv"] - dfc["price"]
         dfc["hot_lead"] = dfc["equity"] / dfc["arv"] >= 0.25
         records = dfc.to_dict("records")
-        # Chunked upsert
         for i in range(0, len(records), 1000):
             supabase.table("propstream_leads").upsert(records[i:i+1000]).execute()
         st.success(f"Uploaded {len(records)} leads; {int(dfc['hot_lead'].sum())} hot.")
@@ -187,9 +193,10 @@ elif page == "Upload Leads":
             dfc["Map"] = dfc.apply(lambda r: f"https://www.google.com/maps?q={r.latitude},{r.longitude}" if hasattr(r, 'latitude') else None, axis=1)
             dfc["Street View"] = dfc.get("street_view_url", "")
         st.dataframe(dfc.head(10), use_container_width=True)
-        if ae: st.write("✉️ Email alert stub sent.")
-        if asms: st.write("📱 SMS alert stub sent.")
-        # Delete uploaded
+        if ae:
+            st.write("✉️ Email alert stub sent.")
+        if asms:
+            st.write("📱 SMS alert stub sent.")
         updf = get_propstream_data()
         del_ids = st.multiselect("Delete uploaded IDs:", updf["id"].tolist())
         if st.button("🗑️ Delete Selected PropStream") and del_ids:
@@ -199,14 +206,13 @@ elif page == "Upload Leads":
 # ───── Deal Tools ─────
 elif page == "Deal Tools":
     st.header("🧮 Deal Tools & Contracts")
-    # Offer Calculator
     st.subheader("🔢 Offer Calculator (MAO)")
     arv = st.number_input("ARV", min_value=0.0, value=150000.0)
     repairs = st.number_input("Repair Costs", min_value=0.0, value=30000.0)
     offer_pct = st.slider("Offer % of ARV", 0.0, 1.0, 0.7)
     mao = (arv * offer_pct) - repairs
     st.metric("MAO", f"${mao:,.2f}")
-    # Assignment Contract Generator
+
     st.subheader("📄 Real Estate Assignment Contract")
     seller = st.text_input("Assignor Name")
     seller_addr = st.text_input("Assignor Address")
@@ -252,19 +258,18 @@ elif page == "Deal Tools":
         buf = BytesIO(data)
         buf.seek(0)
         st.download_button("📄 Download Assignment Contract", data=buf, file_name="assignment_contract.pdf", mime="application/pdf")
-    # Lead Status Tracker
+
     st.subheader("📌 Lead Status Tracker")
     lid = st.text_input("Lead ID to update:")
-    new_status = st.selectbox("Update Status To:",["New","Contacted","Warm","Offer Sent","Under Contract"])
+    new_status = st.selectbox("Update Status To:", ["New","Contacted","Warm","Offer Sent","Under Contract"])
     if st.button("✅ Update Status"):
         if lid:
-            supabase.table("propstream_leads").update({"status":new_status}).eq("id",lid).execute()
+            supabase.table("propstream_leads").update({"status": new_status}).eq("id", lid).execute()
             st.success(f"Lead {lid} set to {new_status}.")
         else:
             st.warning("Enter a valid Lead ID.")
-    # Offer Metrics Summary
+
     st.subheader("📊 Today's Offer Metrics")
-    # Placeholder for real metrics
     offers_sent = 0
     st.write(f"Offers sent today: {offers_sent}")
 
