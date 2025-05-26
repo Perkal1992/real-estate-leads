@@ -9,6 +9,72 @@ import pydeck as pdk
 from io import BytesIO
 from postgrest.exceptions import APIError
 
+def summary_dashboard(df: pd.DataFrame):
+    st.header("📊 Summary Dashboard")
+    
+    # Compute metrics
+    total_leads = len(df)
+    avg_equity_pct = df["Equity%"].mean()
+    avg_est_value = df["Estimated Value"].mean()
+    
+    # Display KPIs
+    kpi1, kpi2, kpi3 = st.columns(3)
+    kpi1.metric("Total Leads", f"{total_leads}")
+    kpi2.metric("Avg Equity %", f"{avg_equity_pct:.1f}%")
+    kpi3.metric("Avg Est. Value", f"${avg_est_value:,.0f}")
+    
+    st.markdown("---")
+    
+    # Leads by ZIP Code
+    zip_counts = df.groupby("Zip Code").size().reset_index(name="Count")
+    bar = (
+        alt.Chart(zip_counts)
+           .mark_bar()
+           .encode(x=alt.X("Zip Code:O", title="ZIP Code"),
+                   y=alt.Y("Count:Q", title="Lead Count"))
+           .properties(title="Leads by ZIP Code")
+    )
+    st.altair_chart(bar, use_container_width=True)
+    
+    st.markdown("---")
+    
+    # Equity% distribution
+    hist = (
+        alt.Chart(df)
+           .mark_bar()
+           .encode(
+               alt.X("Equity%:Q", bin=alt.Bin(maxbins=30), title="Equity %"),
+               y="count()"
+           )
+           .properties(title="Equity % Distribution")
+    )
+    st.altair_chart(hist, use_container_width=True)
+
+# --- In your main script, add a nav item for it ---
+st.sidebar.title("Navigation")
+page = st.sidebar.radio("Go to", [
+    "Upload CSV",
+    "Summary Dashboard",
+    "Qualified Leads",
+    "Top 50 Leads",
+    "Downloads"
+])
+
+# Example upload section
+if page == "Upload CSV":
+    uploaded = st.file_uploader("Upload PropStream CSV", type=["csv"])
+    if uploaded:
+        df = pd.read_csv(uploaded)
+        # compute Equity & Equity%
+        df["Equity"] = df["Estimated Value"] - df["Amount Owed"]
+        df["Equity%"] = df["Equity"] / df["Estimated Value"] * 100
+        st.success("CSV loaded!")
+elif page == "Summary Dashboard":
+    if "df" in locals():
+        summary_dashboard(df)
+    else:
+        st.info("First upload your PropStream CSV on the “Upload CSV” tab.")
+# ... your existing pages for Qualified Leads, Top 50, etc.
 # Attempt to import FPDF for PDF generation
 try:
     from fpdf import FPDF
