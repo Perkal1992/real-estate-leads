@@ -10,6 +10,7 @@ from io import BytesIO
 from postgrest.exceptions import APIError
 import requests, io
 from urllib.parse import quote_plus
+import re
 
 @st.cache_data(ttl=3600)
 def estimate_redfin_arv(address, city, state, zip_code):
@@ -18,9 +19,25 @@ def estimate_redfin_arv(address, city, state, zip_code):
     url = f"https://www.redfin.com/stingray/api/gis-csv?al=1&include=sold&location={q}"
     resp = requests.get(url, headers={"User-Agent": "Mozilla/5.0"})
     df = pd.read_csv(io.StringIO(resp.text))
-    # Clean up PRICE column and average
-    df["PRICE"] = df["PRICE"].replace(r"[\$,]", "", regex=True).astype(float)
-    return df["PRICE"].mean()
+
+    # 1) Find the price column (could be "PRICE", "Sale Price", etc.)
+    price_col = next(
+        (c for c in df.columns if re.search(r"price", c, re.IGNORECASE)),
+        None
+    )
+    if price_col is None:
+        st.error(f"No price column found for {address}")
+        return None
+
+    # 2) Clean it and convert to float
+    df[price_col] = (
+        df[price_col]
+          .astype(str)
+          .replace(r"[\$,]", "", regex=True)
+          .astype(float)
+    )
+    # 3) Return the average sold price
+    return df[price_col].mean()
 
 # ───── Page config MUST be first Streamlit call ─────
 st.set_page_config(
