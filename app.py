@@ -15,6 +15,11 @@ import json
 import requests, io
 from urllib.parse import quote_plus
 
+import re
+import json
+import requests, io
+from urllib.parse import quote_plus
+
 @st.cache_data(ttl=3600)
 def estimate_redfin_arv(address, city, state, zip_code):
     """Fetch average sold price from Redfin CSV API with robust fallback."""
