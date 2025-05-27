@@ -20,23 +20,28 @@ def estimate_redfin_arv(address, city, state, zip_code):
     resp = requests.get(url, headers={"User-Agent": "Mozilla/5.0"})
     df = pd.read_csv(io.StringIO(resp.text))
 
-    # 1) Find the price column (could be "PRICE", "Sale Price", etc.)
-    price_col = next(
-        (c for c in df.columns if re.search(r"price", c, re.IGNORECASE)),
-        None
-    )
-    if price_col is None:
-        st.error(f"No price column found for {address}")
+    # DEBUG: print out what columns we got back
+    st.write(f"Columns for {address}:", df.columns.tolist())
+
+    # 1) Try to find a column with “price” or “sale” in its name
+    candidates = [c for c in df.columns if re.search(r"(price|sale)", c, re.IGNORECASE)]
+    if candidates:
+        price_col = candidates[0]
+    else:
+        # 2) Fallback: pick the first numeric column
+        numeric = df.select_dtypes(include="number").columns.tolist()
+        price_col = numeric[0] if numeric else None
+
+    if not price_col:
+        st.warning(f"No price column detected for {address}; skipping ARV.")
         return None
 
-    # 2) Clean it and convert to float
+    # Clean & convert to float
     df[price_col] = (
-        df[price_col]
-          .astype(str)
-          .replace(r"[\$,]", "", regex=True)
-          .astype(float)
+        df[price_col].astype(str)
+                     .replace(r"[\$,]", "", regex=True)
+                     .astype(float)
     )
-    # 3) Return the average sold price
     return df[price_col].mean()
 
 # ───── Page config MUST be first Streamlit call ─────
