@@ -8,3 +8,6 @@ python-dotenv
 altair
 pydeck
 fpdf
+openpyxl
+selenium
+webdriver-manager
