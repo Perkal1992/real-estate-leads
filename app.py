@@ -343,7 +343,7 @@ elif page == "Leads Dashboard":
 # Upload Leads
 # ---------------------------------
 elif page == "Upload Leads":
-    st.header("📤 Upload & Enrich PropStream Leads")
+    st.header("📤 Upload, Qualify & Enrich All 1 000 Leads")
 
     # 1) Upload CSV
     file = st.file_uploader("Choose your PropStream CSV", type=["csv"])
@@ -351,74 +351,56 @@ elif page == "Upload Leads":
         st.info("Upload your PropStream export first.")
         st.stop()
 
-    dfc = pd.read_csv(file)
-    # rename columns and compute basic Equity
-    dfc.rename(columns={
+    df = pd.read_csv(file)
+    # rename & basic equity calculation
+    df.rename(columns={
         "Property Address": "address",
-        "City": "city",
-        "State": "state",
-        "Zip Code": "zip",
-        "Amount Owed": "owed",
-        "Estimated Value": "est_value"
+        "City":              "city",
+        "State":             "state",
+        "Zip Code":          "zip",
+        "Amount Owed":       "owed",
+        "Estimated Value":   "est_value"
     }, inplace=True)
-    dfc["owed"] = pd.to_numeric(dfc["owed"], errors="coerce").fillna(0)
-    dfc["est_value"] = pd.to_numeric(dfc["est_value"], errors="coerce").fillna(0)
-    dfc["Equity"] = dfc["est_value"] - dfc["owed"]
-    dfc["Equity%"] = dfc["Equity"] / dfc["est_value"] * 100
+    df["owed"]      = pd.to_numeric(df["owed"], errors="coerce").fillna(0)
+    df["est_value"] = pd.to_numeric(df["est_value"], errors="coerce").fillna(0)
 
-    st.success(f"Loaded {len(dfc)} leads; avg Equity% {dfc['Equity%'].mean():.1f}%")
+    # 2) ARV fallback helper
+    def get_arv(r):
+        arv = estimate_redfin_arv(r["address"], r["city"], r["state"], r["zip"])
+        return arv if arv is not None else r["est_value"] * 0.7
 
-    # 2) Pick your top 1k leads
-    best = (dfc
-            .query("est_value >= 100000")
-            .sort_values("Equity%", ascending=False)
-            .head(1000)
-           )
-    st.markdown("#### Best 1k by Est. Value ≥ $100K sorted by Equity%")
-    st.dataframe(best[["address","city","zip","est_value","Equity%"]].head(10))
+    # 3) Enrich all rows
+    st.info("Enriching 1 000 leads (Redfin + 70% fallback)…")
+    df["Redfin_ARV"]    = df.apply(get_arv, axis=1)
+    df["Redfin_Equity"] = df["Redfin_ARV"] - df["owed"]
+    df["Redfin_Equity%"] = (df["Redfin_Equity"] / df["Redfin_ARV"]) * 100
 
-    # 3) Enrichment button for Redfin ARV
-    if st.button("🤖 Enrich Top 50 with Redfin ARV"):
-        top50 = best.head(50).copy()
-        st.info("Querying Redfin for ARV… this may take ~30–60s")
-        top50["Redfin_ARV"] = top50.apply(
-            lambda r: estimate_redfin_arv(r["address"], r["city"], r["state"], r["zip"]),
-            axis=1
-        )
-        top50["Redfin_Equity"] = top50["Redfin_ARV"] - top50["owed"]
-        top50["Redfin_Equity%"] = top50["Redfin_Equity"] / top50["Redfin_ARV"] * 100
+    # 4) Qualify by ARV ≥ $100 000 & Equity% ≥ 30%
+    qualified = df[
+        (df["Redfin_ARV"] >= 100_000) &
+        (df["Redfin_Equity%"] >= 30)
+    ].copy()
+    qualified.sort_values("Redfin_Equity%", ascending=False, inplace=True)
 
-        st.success("Enrichment complete!")
-        st.dataframe(
-            top50[["address","city","zip","est_value","Redfin_ARV","Redfin_Equity%"]],
-            use_container_width=True,
-            height=500
-        )
+    st.markdown(f"### {len(qualified)} Qualified & Enriched Leads")
+    st.dataframe(
+        qualified[[
+            "address","city","zip","owed",
+            "Redfin_ARV","Redfin_Equity","Redfin_Equity%"
+        ]].head(50),
+        height=400,
+        use_container_width=True
+    )
 
-        # 4) Download CSV of enriched top50
-        csv = top50.to_csv(index=False).encode()
-        st.download_button(
-            "📥 Download Enriched Top 50",
-            data=csv,
-            file_name="enriched_top50.csv",
-            mime="text/csv"
-        )
-
-        # 5) (Optional) Push back to Supabase
-        if st.checkbox("Upsert enriched leads to Supabase"):
-            records = top50.rename(columns={
-                "address":"address",
-                "city":"city",
-                "state":"state",
-                "zip":"zip",
-                "est_value":"est_value",
-                "owed":"owed",
-                "Redfin_ARV":"redfin_arv",
-                "Redfin_Equity%":"redfin_equity_pct"
-            }).to_dict("records")
-            supabase.table("propstream_leads").upsert(records).execute()
-            st.success("✅ Upserted enriched leads to Supabase.")
-
+    # 5) Download CSV of the full qualified set
+    csv = qualified.to_csv(index=False).encode()
+    st.download_button(
+        "📥 Download Qualified & Enriched Leads",
+        data=csv,
+        file_name="qualified_enriched_leads.csv",
+        mime="text/csv"
+    )
+    
 # ---------------------------------
 # Deal Tools & Assignment Contract
 # ---------------------------------
