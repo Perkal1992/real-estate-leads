@@ -11,32 +11,45 @@ from postgrest.exceptions import APIError
 import requests, io
 from urllib.parse import quote_plus
 import re
+import json
+import requests, io
+from urllib.parse import quote_plus
 
 @st.cache_data(ttl=3600)
 def estimate_redfin_arv(address, city, state, zip_code):
-    """Fetch average sold price from Redfin sold-comps CSV API."""
+    """Fetch average sold price from Redfin sold-comps CSV API, with error handling."""
     q = quote_plus(f"{address}, {city}, {state} {zip_code}")
     url = f"https://www.redfin.com/stingray/api/gis-csv?al=1&include=sold&location={q}"
     resp = requests.get(url, headers={"User-Agent": "Mozilla/5.0"})
-    df = pd.read_csv(io.StringIO(resp.text))
+    text = resp.text.strip()
 
-    # DEBUG: print out what columns we got back
-    st.write(f"Columns for {address}:", df.columns.tolist())
+    # Detect Redfin error responses that look like ["{}&&{ ... }"]
+    if text.startswith('['):
+        # extract the JSON blob inside
+        m = re.search(r'\{.*\}', text)
+        if m:
+            err = json.loads(m.group(0))
+            st.warning(f"Redfin error for {address}: {err.get('errorMessage')}")
+        else:
+            st.warning(f"Unexpected Redfin response for {address}")
+        return None
 
-    # 1) Try to find a column with “price” or “sale” in its name
+    # Otherwise parse as CSV
+    df = pd.read_csv(io.StringIO(text))
+
+    # Try to find a price column
     candidates = [c for c in df.columns if re.search(r"(price|sale)", c, re.IGNORECASE)]
     if candidates:
         price_col = candidates[0]
     else:
-        # 2) Fallback: pick the first numeric column
         numeric = df.select_dtypes(include="number").columns.tolist()
         price_col = numeric[0] if numeric else None
 
     if not price_col:
-        st.warning(f"No price column detected for {address}; skipping ARV.")
+        st.warning(f"No numeric price column for {address}; skipping.")
         return None
 
-    # Clean & convert to float
+    # Clean & convert
     df[price_col] = (
         df[price_col].astype(str)
                      .replace(r"[\$,]", "", regex=True)
