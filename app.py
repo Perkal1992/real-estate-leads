@@ -16,38 +16,49 @@ st.set_page_config(
     layout="wide",
 )
 
+# ───── Restore sidebar collapse arrow & set non-stretched background logo ─────
+def _get_base64(path):
+    with open(path, "rb") as f:
+        return base64.b64encode(f.read()).decode()
+
+bg = _get_base64("logo.png")
+st.markdown(f"""
+    <style>
+      /* Show the sidebar collapse arrow */
+      [data-testid="collapsedControl"] {{
+        display: block !important;
+      }}
+      /* Background logo, not stretched */
+      [data-testid="stAppViewContainer"] {{
+        background-image: url('data:image/png;base64,{bg}');
+        background-repeat: no-repeat;
+        background-position: center;
+        background-size: contain;
+      }}
+    </style>
+""", unsafe_allow_html=True)
+
+# ──────────────────────────────────────────────────────────────────────────────
 def summary_dashboard(df: pd.DataFrame):
     st.header("📊 Summary Dashboard")
-    
-    # Compute metrics
     total_leads = len(df)
     avg_equity_pct = df["Equity%"].mean()
     avg_est_value = df["Estimated Value"].mean()
-    
-    # Display KPIs
-    kpi1, kpi2, kpi3 = st.columns(3)
-    kpi1.metric("Total Leads", f"{total_leads}")
-    kpi2.metric("Avg Equity %", f"{avg_equity_pct:.1f}%")
-    kpi3.metric("Avg Est. Value", f"${avg_est_value:,.0f}")
-    
+    k1, k2, k3 = st.columns(3)
+    k1.metric("Total Leads", f"{total_leads}")
+    k2.metric("Avg Equity %", f"{avg_equity_pct:.1f}%")
+    k3.metric("Avg Est. Value", f"${avg_est_value:,.0f}")
     st.markdown("---")
-    
-    # Leads by ZIP Code
     zip_counts = df.groupby("Zip Code").size().reset_index(name="Count")
     bar = (
         alt.Chart(zip_counts)
            .mark_bar()
-           .encode(
-               x=alt.X("Zip Code:O", title="ZIP Code"),
-               y=alt.Y("Count:Q", title="Lead Count")
-           )
+           .encode(x=alt.X("Zip Code:O", title="ZIP Code"),
+                   y=alt.Y("Count:Q", title="Lead Count"))
            .properties(title="Leads by ZIP Code")
     )
     st.altair_chart(bar, use_container_width=True)
-    
     st.markdown("---")
-    
-    # Equity% distribution
     hist = (
         alt.Chart(df)
            .mark_bar()
@@ -59,7 +70,7 @@ def summary_dashboard(df: pd.DataFrame):
     )
     st.altair_chart(hist, use_container_width=True)
 
-# --- Demo nav for summary dashboard ---
+# --- Sidebar Demo Nav (for Summary tab) ---
 st.sidebar.title("Navigation")
 demo_page = st.sidebar.radio("Go to", [
     "Upload CSV",
@@ -82,6 +93,9 @@ elif demo_page == "Summary Dashboard":
     else:
         st.info("First upload your PropStream CSV on the “Upload CSV” tab.")
 
+# ──────────────────────────────────────────────────────────────────────────────
+# PDF gen, Supabase init, helper funcs, other pages...
+# (rest of your code stays exactly as before)
 # ──────────────────────────────────────────────────────────────────────────────
 # Attempt to import FPDF for PDF generation
 try:
