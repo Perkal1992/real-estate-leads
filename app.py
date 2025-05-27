@@ -8,6 +8,19 @@ import altair as alt
 import pydeck as pdk
 from io import BytesIO
 from postgrest.exceptions import APIError
+import requests, io
+from urllib.parse import quote_plus
+
+@st.cache_data(ttl=3600)
+def estimate_redfin_arv(address, city, state, zip_code):
+    """Fetch average sold price from Redfin sold-comps CSV API."""
+    q = quote_plus(f"{address}, {city}, {state} {zip_code}")
+    url = f"https://www.redfin.com/stingray/api/gis-csv?al=1&include=sold&location={q}"
+    resp = requests.get(url, headers={"User-Agent": "Mozilla/5.0"})
+    df = pd.read_csv(io.StringIO(resp.text))
+    # Clean up PRICE column and average
+    df["PRICE"] = df["PRICE"].replace(r"[\$,]", "", regex=True).astype(float)
+    return df["PRICE"].mean()
 
 # ───── Page config MUST be first Streamlit call ─────
 st.set_page_config(
@@ -283,50 +296,81 @@ elif page == "Leads Dashboard":
 # Upload Leads
 # ---------------------------------
 elif page == "Upload Leads":
-    st.header("📤 Upload PropStream Leads")
-    zf = st.sidebar.text_input("ZIP filter:", "")
-    cf = st.sidebar.text_input("City filter:", "")
-    im = st.sidebar.checkbox("🔗 Map & Street View", False)
-    ae = st.sidebar.checkbox("✉️ Email Alert", False)
-    asms = st.sidebar.checkbox("📱 SMS Alert", False)
-    file = st.file_uploader("CSV", type=["csv"])
-    if file:
-        dfc = pd.read_csv(file)
-        dfc.rename(columns={
-            "Property Address":"address","City":"city","State":"state",
-            "Zip Code":"zip","Amount Owed":"price","Estimated Value":"arv"
-        }, inplace=True)
-        dfc = dfc.replace([np.inf,-np.inf], np.nan)
-        dfc["arv"] = pd.to_numeric(dfc["arv"], errors="coerce").fillna(0)
-        dfc["price"] = pd.to_numeric(dfc["price"], errors="coerce").fillna(0)
-        if zf:
-            dfc = dfc[dfc["zip"].astype(str).isin(zf.split(","))]
-        if cf:
-            dfc = dfc[dfc["city"].str.lower()==cf.lower()]
-        dfc["equity"] = dfc["arv"] - dfc["price"]
-        dfc["hot_lead"] = (dfc["equity"]/dfc["arv"].replace({0:np.nan}))>=0.25
-        dfc["hot_lead"] = dfc["hot_lead"].fillna(False)
-        raw_records = dfc.to_dict("records")
-        clean_records = []
-        for rec in raw_records:
-            clean = {}
-            for k,v in rec.items():
-                clean[k] = v.item() if isinstance(v, (np.generic,)) else v
-                if isinstance(clean[k], float) and (np.isnan(clean[k]) or np.isinf(clean[k])):
-                    clean[k] = None
-            clean_records.append(clean)
-        for i in range(0,len(clean_records),1000):
-            supabase.table("propstream_leads").upsert(clean_records[i:i+1000]).execute()
-        st.success(f"Uploaded {len(clean_records)} leads; {int(dfc['hot_lead'].sum())} hot.")
-        if im:
-            dfc["Map"] = dfc.apply(
-                lambda r: f"https://www.google.com/maps?q={r.latitude},{r.longitude}"
-                if hasattr(r,"latitude") else None, axis=1
-            )
-            dfc["Street View"] = dfc.get("street_view_url","")
-        st.dataframe(dfc.head(10), use_container_width=True)
-        if ae: st.write("✉️ Email alert stub sent.")
-        if asms: st.write("📱 SMS alert stub sent.")
+    st.header("📤 Upload & Enrich PropStream Leads")
+
+    # 1) Upload CSV
+    file = st.file_uploader("Choose your PropStream CSV", type=["csv"])
+    if not file:
+        st.info("Upload your PropStream export first.")
+        st.stop()
+
+    dfc = pd.read_csv(file)
+    # rename columns and compute basic Equity
+    dfc.rename(columns={
+        "Property Address": "address",
+        "City": "city",
+        "State": "state",
+        "Zip Code": "zip",
+        "Amount Owed": "owed",
+        "Estimated Value": "est_value"
+    }, inplace=True)
+    dfc["owed"] = pd.to_numeric(dfc["owed"], errors="coerce").fillna(0)
+    dfc["est_value"] = pd.to_numeric(dfc["est_value"], errors="coerce").fillna(0)
+    dfc["Equity"] = dfc["est_value"] - dfc["owed"]
+    dfc["Equity%"] = dfc["Equity"] / dfc["est_value"] * 100
+
+    st.success(f"Loaded {len(dfc)} leads; avg Equity% {dfc['Equity%'].mean():.1f}%")
+
+    # 2) Pick your top 1k leads
+    best = (dfc
+            .query("est_value >= 100000")
+            .sort_values("Equity%", ascending=False)
+            .head(1000)
+           )
+    st.markdown("#### Best 1k by Est. Value ≥ $100K sorted by Equity%")
+    st.dataframe(best[["address","city","zip","est_value","Equity%"]].head(10))
+
+    # 3) Enrichment button for Redfin ARV
+    if st.button("🤖 Enrich Top 50 with Redfin ARV"):
+        top50 = best.head(50).copy()
+        st.info("Querying Redfin for ARV… this may take ~30–60s")
+        top50["Redfin_ARV"] = top50.apply(
+            lambda r: estimate_redfin_arv(r["address"], r["city"], r["state"], r["zip"]),
+            axis=1
+        )
+        top50["Redfin_Equity"] = top50["Redfin_ARV"] - top50["owed"]
+        top50["Redfin_Equity%"] = top50["Redfin_Equity"] / top50["Redfin_ARV"] * 100
+
+        st.success("Enrichment complete!")
+        st.dataframe(
+            top50[["address","city","zip","est_value","Redfin_ARV","Redfin_Equity%"]],
+            use_container_width=True,
+            height=500
+        )
+
+        # 4) Download CSV of enriched top50
+        csv = top50.to_csv(index=False).encode()
+        st.download_button(
+            "📥 Download Enriched Top 50",
+            data=csv,
+            file_name="enriched_top50.csv",
+            mime="text/csv"
+        )
+
+        # 5) (Optional) Push back to Supabase
+        if st.checkbox("Upsert enriched leads to Supabase"):
+            records = top50.rename(columns={
+                "address":"address",
+                "city":"city",
+                "state":"state",
+                "zip":"zip",
+                "est_value":"est_value",
+                "owed":"owed",
+                "Redfin_ARV":"redfin_arv",
+                "Redfin_Equity%":"redfin_equity_pct"
+            }).to_dict("records")
+            supabase.table("propstream_leads").upsert(records).execute()
+            st.success("✅ Upserted enriched leads to Supabase.")
 
 # ---------------------------------
 # Deal Tools & Assignment Contract
