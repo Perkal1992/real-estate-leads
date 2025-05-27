@@ -17,15 +17,14 @@ from urllib.parse import quote_plus
 
 @st.cache_data(ttl=3600)
 def estimate_redfin_arv(address, city, state, zip_code):
-    """Fetch average sold price from Redfin sold-comps CSV API, with error handling."""
+    """Fetch average sold price from Redfin CSV API with robust fallback."""
     q = quote_plus(f"{address}, {city}, {state} {zip_code}")
     url = f"https://www.redfin.com/stingray/api/gis-csv?al=1&include=sold&location={q}"
     resp = requests.get(url, headers={"User-Agent": "Mozilla/5.0"})
     text = resp.text.strip()
 
-    # Detect Redfin error responses that look like ["{}&&{ ... }"]
-    if text.startswith('['):
-        # extract the JSON blob inside
+    # 1) Catch Redfin error responses
+    if text.startswith("["):
         m = re.search(r'\{.*\}', text)
         if m:
             err = json.loads(m.group(0))
@@ -34,22 +33,30 @@ def estimate_redfin_arv(address, city, state, zip_code):
             st.warning(f"Unexpected Redfin response for {address}")
         return None
 
-    # Otherwise parse as CSV
+    # 2) Parse CSV
     df = pd.read_csv(io.StringIO(text))
 
-    # Try to find a price column
+    # 3) Try obvious column names
     candidates = [c for c in df.columns if re.search(r"(price|sale)", c, re.IGNORECASE)]
-    if candidates:
-        price_col = candidates[0]
-    else:
-        numeric = df.select_dtypes(include="number").columns.tolist()
-        price_col = numeric[0] if numeric else None
+    price_col = candidates[0] if candidates else None
+
+    # 4) Fallback: find any column where >50% of entries parse as numbers
+    if not price_col:
+        for c in df.columns:
+            cleaned = (
+                df[c].astype(str)
+                      .str.replace(r"[^\d\.]", "", regex=True)
+            )
+            nums = pd.to_numeric(cleaned, errors="coerce")
+            if nums.notna().sum() / len(nums) > 0.5:
+                price_col = c
+                break
 
     if not price_col:
-        st.warning(f"No numeric price column for {address}; skipping.")
+        st.warning(f"No numeric price column for {address}; skipping ARV.")
         return None
 
-    # Clean & convert
+    # 5) Clean & average
     df[price_col] = (
         df[price_col].astype(str)
                      .replace(r"[\$,]", "", regex=True)
