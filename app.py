@@ -28,16 +28,17 @@ st.markdown(f"""
       [data-testid="collapsedControl"] {{
         display: block !important;
       }}
-      /* Background logo, not stretched */
+      /* Dark overlay + centered, non-stretched logo */
       [data-testid="stAppViewContainer"] {{
-        background-image: url('data:image/png;base64,{bg}');
+        background-image:
+          linear-gradient(rgba(0,0,0,0.6), rgba(0,0,0,0.6)),
+          url('data:image/png;base64,{bg}');
         background-repeat: no-repeat;
         background-position: center;
         background-size: contain;
       }}
     </style>
 """, unsafe_allow_html=True)
-
 # ──────────────────────────────────────────────────────────────────────────────
 def summary_dashboard(df: pd.DataFrame):
     st.header("📊 Summary Dashboard")
